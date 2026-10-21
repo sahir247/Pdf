@@ -180,8 +180,8 @@ public final class PdfPrintDocumentAdapter extends PrintDocumentAdapter {
                         float bottom = (crop.getUpperRightY() - rect.getLowerLeftY()) * scaleY;
 
                         RectF badgeRect = new RectF(left, top, right, bottom);
-                        java.util.List<String> detailLines = DynamicSignatureOverlay.extractAppearanceTextLines(widget);
-                        DynamicSignatureOverlay.drawSignatureBadge(canvas, badgeRect, signerName, signingDate, detailLines, true);
+                        DynamicSignatureOverlay.AppearanceLayout layout = DynamicSignatureOverlay.extractAppearanceLayout(widget);
+                        DynamicSignatureOverlay.drawSignatureBadge(canvas, badgeRect, signerName, signingDate, layout, true);
                     }
                 }
             }
