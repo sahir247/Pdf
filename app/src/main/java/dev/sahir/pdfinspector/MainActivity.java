@@ -47,13 +47,19 @@ public final class MainActivity extends Activity {
     private static final int PICK_PDF = 1001;
     private static final int SAVE_PDF_COPY = 1002;
     private static final int PICK_TRUSTED_CA = 1003;
+    private static final int PICK_SIGNING_IDENTITY = 1004;
+    private static final int SAVE_SIGNED_PDF = 1005;
     private static final long MAX_PDF_BYTES = 50L * 1024L * 1024L;
     private byte[] pendingSaveBytes;
-    private String pendingSaveName = "verified-copy.pdf";
+    private byte[] pendingPkcs12Bytes;
+    private String pendingSaveName = "pdf-copy.pdf";
+    private boolean pendingOutputIsSigned;
 
     private LinearLayout content;
     private LinearLayout actions;
     private TextView status;
+    private Button saveOriginalButton;
+    private Button signPdfButton;
     private TrustedCertificateStore trustStore;
     private byte[] currentPdf;
     private String currentPdfName = "No PDF selected";
@@ -121,6 +127,18 @@ public final class MainActivity extends Activity {
         actions.setOrientation(LinearLayout.VERTICAL);
         content.addView(actions);
 
+        saveOriginalButton = button("Save original PDF copy");
+        saveOriginalButton.setEnabled(false);
+        saveOriginalButton.setOnClickListener(v -> saveOriginalPdfCopy());
+        addSpace(8);
+        content.addView(saveOriginalButton);
+
+        signPdfButton = button("Sign PDF with a certificate");
+        signPdfButton.setEnabled(false);
+        signPdfButton.setOnClickListener(v -> chooseSigningIdentity());
+        addSpace(8);
+        content.addView(signPdfButton);
+
         Button manage = button("Manage trusted certificates");
         manage.setOnClickListener(v -> showTrustedCertificates());
         addSpace(12);
@@ -155,6 +173,74 @@ public final class MainActivity extends Activity {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
         startActivityForResult(intent, PICK_TRUSTED_CA);
+    }
+
+    private void chooseSigningIdentity() {
+        if (currentPdf == null) {
+            toast("Choose a PDF before signing.");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Before signing")
+                .setMessage("Select a PKCS#12 (.p12/.pfx) identity containing your private key and certificate. The app cannot create a valid signature from a public certificate alone. Only use a key you are authorized to use.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Choose identity", (d, w) -> {
+                    Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("*/*");
+                    startActivityForResult(intent, PICK_SIGNING_IDENTITY);
+                }).show();
+    }
+
+    private void showSigningPasswordDialog() {
+        if (pendingPkcs12Bytes == null) {
+            toast("Select the signing identity again.");
+            return;
+        }
+        EditText passwordInput = new EditText(this);
+        passwordInput.setSingleLine(true);
+        passwordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        passwordInput.setHint("PKCS#12 password");
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(20), dp(8), dp(20), dp(4));
+        panel.addView(text("The password is used in memory to unlock your private-key identity. It is not saved by this app.", 14, false, 0xFF263746));
+        addDialogSpace(panel, 10);
+        panel.addView(passwordInput);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Unlock signing identity")
+                .setView(panel)
+                .setNegativeButton("Cancel", (d, w) -> {
+                    pendingPkcs12Bytes = null;
+                    passwordInput.setText("");
+                })
+                .setPositiveButton("Sign PDF", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            char[] password = passwordInput.getText().toString().toCharArray();
+            passwordInput.setText("");
+            byte[] identity = pendingPkcs12Bytes;
+            pendingPkcs12Bytes = null;
+            dialog.dismiss();
+            try {
+                byte[] signed = PdfSigningService.sign(this, currentPdf, currentPdfPassword, identity, password);
+                pendingSaveBytes = signed;
+                pendingOutputIsSigned = true;
+                String baseName = currentPdfName == null ? "document.pdf" : currentPdfName.trim();
+                if (baseName.isEmpty()) baseName = "document.pdf";
+                if (!baseName.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf")) baseName += ".pdf";
+                pendingSaveName = baseName.substring(0, baseName.length() - 4) + "-signed.pdf";
+                Intent output = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                output.addCategory(Intent.CATEGORY_OPENABLE);
+                output.setType("application/pdf");
+                output.putExtra(Intent.EXTRA_TITLE, pendingSaveName);
+                startActivityForResult(output, SAVE_SIGNED_PDF);
+            } catch (Exception e) {
+                java.util.Arrays.fill(password, '\\0');
+                toast("Signing failed: " + safeMessage(e));
+            }
+        }));
+        dialog.show();
     }
 
     private void showTrustedCaAnchors() {
@@ -237,24 +323,41 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == SAVE_PDF_COPY) {
+        if (requestCode == SAVE_PDF_COPY || requestCode == SAVE_SIGNED_PDF) {
             if (resultCode != RESULT_OK || data == null || data.getData() == null) {
                 pendingSaveBytes = null;
+                pendingOutputIsSigned = false;
                 return;
             }
             if (pendingSaveBytes == null) {
-                toast("The PDF copy is no longer available. Inspect the document again.");
+                toast("The PDF output is no longer available. Please repeat the operation.");
                 return;
             }
             try (java.io.OutputStream out = getContentResolver().openOutputStream(data.getData(), "wt")) {
                 if (out == null) throw new IllegalStateException("Unable to create the destination PDF.");
                 out.write(pendingSaveBytes);
                 out.flush();
-                toast("Original PDF copy saved. Its embedded signature bytes were not modified.");
+                toast(pendingOutputIsSigned
+                        ? "Digitally signed PDF saved. Reopen it and verify the new signature."
+                        : "Original PDF copy saved unchanged. No new signature was added.");
             } catch (Exception e) {
-                toast("Could not save PDF copy: " + safeMessage(e));
+                toast("Could not save PDF: " + safeMessage(e));
             } finally {
                 pendingSaveBytes = null;
+                pendingOutputIsSigned = false;
+            }
+            return;
+        }
+        if (requestCode == PICK_SIGNING_IDENTITY) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                try (InputStream in = getContentResolver().openInputStream(data.getData())) {
+                    if (in == null) throw new IllegalStateException("Unable to open the selected PKCS#12 file.");
+                    pendingPkcs12Bytes = readBounded(in, 5L * 1024L * 1024L);
+                    showSigningPasswordDialog();
+                } catch (Exception e) {
+                    pendingPkcs12Bytes = null;
+                    toast("Could not read signing identity: " + safeMessage(e));
+                }
             }
             return;
         }
@@ -271,10 +374,14 @@ public final class MainActivity extends Activity {
             currentPdf = readBounded(in, MAX_PDF_BYTES);
             currentPdfName = queryDisplayName(uri);
             currentPdfPassword = "";
+            saveOriginalButton.setEnabled(true);
+            signPdfButton.setEnabled(true);
             inspectPdf();
         } catch (Exception e) {
             currentPdf = null;
             currentPdfPassword = "";
+            saveOriginalButton.setEnabled(false);
+            signPdfButton.setEnabled(false);
             records.clear();
             actions.removeAllViews();
             showStatus("Could not inspect PDF\n" + safeMessage(e) +
@@ -289,7 +396,7 @@ public final class MainActivity extends Activity {
         int n;
         while ((n = in.read(buffer)) != -1) {
             total += n;
-            if (total > limit) throw new IllegalArgumentException("PDF exceeds the 50 MiB prototype limit.");
+            if (total > limit) throw new IllegalArgumentException("Selected file exceeds the size limit.");
             out.write(buffer, 0, n);
         }
         return out.toByteArray();
@@ -539,17 +646,17 @@ public final class MainActivity extends Activity {
         return true;
     }
 
-    private void saveVerifiedPdfCopy() {
-        if (!isEligibleForGreenTick()) {
-            toast("Save is available only while the displayed signature checks still pass.");
+    private void saveOriginalPdfCopy() {
+        if (currentPdf == null) {
+            toast("Choose a PDF first.");
             return;
         }
         pendingSaveBytes = currentPdf.clone();
+        pendingOutputIsSigned = false;
         String baseName = currentPdfName == null ? "document.pdf" : currentPdfName.trim();
         if (baseName.isEmpty()) baseName = "document.pdf";
         if (!baseName.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf")) baseName += ".pdf";
-        int extension = baseName.length() - 4;
-        pendingSaveName = baseName.substring(0, extension) + "-verified-copy.pdf";
+        pendingSaveName = baseName.substring(0, baseName.length() - 4) + "-original-copy.pdf";
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("application/pdf");
