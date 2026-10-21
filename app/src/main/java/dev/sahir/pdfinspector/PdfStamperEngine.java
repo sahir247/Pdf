@@ -189,7 +189,9 @@ public final class PdfStamperEngine {
 
                         float width = bbox != null ? Math.abs(bbox.getWidth()) : 100f;
                         float height = bbox != null ? Math.abs(bbox.getHeight()) : 100f;
-                        PDFormXObject greenCheckmark = createAdobeGreenCheckmarkForm(document, width, height);
+                        float parentWidth = appStream.getBBox() != null ? Math.abs(appStream.getBBox().getWidth()) : width;
+                        float parentHeight = appStream.getBBox() != null ? Math.abs(appStream.getBBox().getHeight()) : height;
+                        PDFormXObject greenCheckmark = createAdobeGreenCheckmarkForm(document, width, height, parentWidth, parentHeight);
                         xobjects.setItem(n1Key, greenCheckmark.getCOSObject());
                         changed = true;
                     } catch (Exception ignored) { }
@@ -247,8 +249,35 @@ public final class PdfStamperEngine {
      * scaled to Adobe's standard 0.763 form ratio to ensure the checkmark's right tip terminates
      * cleanly inside the letter 'a' of "valid" without crossing 'l', 'i', or 'd'.
      */
-    private static PDFormXObject createAdobeGreenCheckmarkForm(PDDocument document, float width, float height) throws Exception {
+    private static PDFormXObject createAdobeGreenCheckmarkForm(PDDocument document, float width, float height, float parentWidth, float parentHeight) throws Exception {
         PDFormXObject form = new PDFormXObject(document);
+
+        if (parentWidth > 0 && parentWidth <= 65f) {
+            // Compact stamps (e.g. Aadhaar 50x30 pt):
+            // Checkmark is calibrated to rest over 'Signature' and '2026.10.21'
+            // Right tip terminates at 'u'/'r'/'e' of 'Signature' before 'valid', matching Adobe Acrobat DC
+            form.setBBox(new PDRectangle(-30, 0, 100, 100));
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("q\n");
+            sb.append("1 J 1 j 4 M [] 0 d\n");
+            // Layer 1: Subtle shadow (1px offset)
+            sb.append("0 G\n");
+            sb.append("2.61 24.77 m -18.37 47.56 l -12.23 56.51 l 2.01 37.89 l 27.05 84.65 l 35.81 77.60 l h f\n");
+            // Layer 2: Vibrant Adobe Green fill
+            sb.append("0 0.7 0.23 rg\n");
+            sb.append("1.61 25.97 m -19.37 48.76 l -13.23 57.71 l 1.01 39.09 l 26.05 85.85 l 34.81 78.80 l h f\n");
+            // Layer 3: Crisp delicate black outline (1px)
+            sb.append("0 G 0.7 w\n");
+            sb.append("1.61 25.97 m -19.37 48.76 l -13.23 57.71 l 1.01 39.09 l 26.05 85.85 l 34.81 78.80 l h S\n");
+            sb.append("Q\n");
+
+            try (OutputStream out = form.getCOSObject().createOutputStream()) {
+                out.write(sb.toString().getBytes(StandardCharsets.ISO_8859_1));
+            }
+            return form;
+        }
+
         form.setBBox(new PDRectangle(0, 0, width, height));
 
         float scale = Math.min(width / 100f, height / 100f);
@@ -264,8 +293,8 @@ public final class PdfStamperEngine {
         // Layer 2: Vibrant Adobe Green fill (0, 0.7, 0.23 rg)
         sb.append("0 0.7 0.23 rg\n");
         sb.append("28.8 3.8 m 1.9 30.4 l 9.8 40.9 l 28.0 19.2 l 60.0 73.8 l 71.3 65.5 l h f\n");
-        // Layer 3: Crisp black outer outline border stroke (1.4 w)
-        sb.append("0 G 1.4 w\n");
+        // Layer 3: Crisp black outer outline border stroke (0.9 w)
+        sb.append("0 G 0.9 w\n");
         sb.append("28.8 3.8 m 1.9 30.4 l 9.8 40.9 l 28.0 19.2 l 60.0 73.8 l 71.3 65.5 l h S\n");
         sb.append("Q\n");
 
