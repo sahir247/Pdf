@@ -98,14 +98,14 @@ public final class CertificatePathValidator {
             for (X509Certificate appAnchor : appAnchors) {
                 if (sameCertificate(anchor, appAnchor)) {
                     return new Result(Status.TRUSTED_APP_PATH,
-                            "Certificate path reaches a CA explicitly imported as a trust anchor in this app.");
+                            "Certificate path reaches a bundled or user-imported CA trust anchor in this app.");
                 }
             }
             return new Result(Status.TRUSTED_SYSTEM_PATH,
                     "Certificate path reaches an Android system trust anchor at the current device time.");
         } catch (CertPathBuilderException e) {
             return new Result(Status.UNTRUSTED,
-                    "No valid path to an Android system or app-imported CA trust anchor was found at the current device time.");
+                    "No valid path to an Android system, bundled, or user-imported CA trust anchor was found at the current device time.");
         } catch (Exception e) {
             return new Result(Status.UNKNOWN,
                     "Certificate path validation could not be completed (" +
