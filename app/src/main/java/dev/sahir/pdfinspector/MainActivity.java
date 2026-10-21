@@ -46,6 +46,7 @@ import java.util.List;
 public final class MainActivity extends Activity {
     private static final int PICK_PDF = 1001;
     private static final int SAVE_PDF_COPY = 1002;
+    private static final int PICK_TRUSTED_CA = 1003;
     private static final long MAX_PDF_BYTES = 50L * 1024L * 1024L;
     private byte[] pendingSaveBytes;
     private String pendingSaveName = "verified-copy.pdf";
@@ -132,7 +133,12 @@ public final class MainActivity extends Activity {
         addSpace(12);
         content.addView(manage);
 
-        TextView caveat = text("A green tick means the CMS signature mathematics verified, the exact signer certificate is trusted locally in this app, the certificate is valid at the current device time, and the signature ByteRange covers the current file. It is not a guarantee of issuer status: revocation, trusted timestamps, complete revision analysis and DocMDP/FieldMDP permissions are not implemented. Saving exports the original PDF bytes without changing its signature.", 12, false, 0xFF6A4B12);
+        Button importCa = button("Import trusted CA certificate");
+        importCa.setOnClickListener(v -> chooseTrustedCa());
+        addSpace(8);
+        content.addView(importCa);
+
+        TextView caveat = text("A green tick requires valid CMS cryptography, current certificate validity, full-file ByteRange coverage, and a certificate path to an Android system CA or a CA you explicitly imported into this app. A leaf-certificate pin alone is not a trusted issuer chain. Revocation, trusted timestamps, and complete PDF revision / DocMDP / FieldMDP analysis remain unimplemented. Saving exports the original PDF bytes unchanged.", 12, false, 0xFF6A4B12);
         caveat.setPadding(dp(12), dp(12), dp(12), dp(12));
         caveat.setBackground(roundBg(0xFFFFF4D6, 0xFFFFE0A3));
         addSpace(16);
@@ -144,6 +150,54 @@ public final class MainActivity extends Activity {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("application/pdf");
         startActivityForResult(intent, PICK_PDF);
+    }
+
+    private void chooseTrustedCa() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        startActivityForResult(intent, PICK_TRUSTED_CA);
+    }
+
+    private void reviewTrustedCa(Uri uri) {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new IllegalStateException("Unable to open the selected certificate.");
+            byte[] bytes = readBounded(in, 2L * 1024L * 1024L);
+            java.security.cert.CertificateFactory factory =
+                    java.security.cert.CertificateFactory.getInstance("X.509");
+            X509Certificate certificate = (X509Certificate) factory.generateCertificate(
+                    new ByteArrayInputStream(bytes));
+            if (certificate.getBasicConstraints() < 0) {
+                throw new SecurityException("This is not a CA certificate. Import a CA certificate, not a signer/leaf certificate.");
+            }
+            boolean[] usage = certificate.getKeyUsage();
+            if (usage != null && (usage.length <= 5 || !usage[5])) {
+                throw new SecurityException("The certificate's key usage does not permit certificate signing.");
+            }
+            certificate.checkValidity(new Date());
+            String fingerprint = TrustedCertificateStore.fingerprint(certificate);
+            String message = "Import this certificate as an app-specific trust anchor?\n\n"
+                    + "Subject: " + certificate.getSubjectX500Principal().getName() + "\n\n"
+                    + "Issuer: " + certificate.getIssuerX500Principal().getName() + "\n\n"
+                    + "SHA-256: " + fingerprint + "\n\n"
+                    + "Only import a CA certificate obtained from an authoritative source and independently verify its full fingerprint. "
+                    + "Importing it changes trust decisions inside this app only; it does not modify Android or Adobe Acrobat's trust store.";
+            new AlertDialog.Builder(this)
+                    .setTitle("Review CA trust anchor")
+                    .setMessage(message)
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Import CA", (d, w) -> {
+                        try {
+                            trustStore.trustCertificateAuthority(certificate);
+                            toast("CA trust anchor imported into this app.");
+                            if (currentPdf != null) inspectPdf();
+                        } catch (Exception e) {
+                            toast("Could not import CA: " + safeMessage(e));
+                        }
+                    }).show();
+        } catch (Exception e) {
+            toast("Certificate rejected: " + safeMessage(e));
+        }
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
@@ -166,6 +220,12 @@ public final class MainActivity extends Activity {
                 toast("Could not save PDF copy: " + safeMessage(e));
             } finally {
                 pendingSaveBytes = null;
+            }
+            return;
+        }
+        if (requestCode == PICK_TRUSTED_CA) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                reviewTrustedCa(data.getData());
             }
             return;
         }
@@ -321,7 +381,8 @@ public final class MainActivity extends Activity {
                         if (signerRecord.certificate != null) {
                             signerRecord.fingerprint = TrustedCertificateStore.fingerprint(signerRecord.certificate);
                             signerRecord.pathResult = CertificatePathValidator.validate(
-                                    signerRecord.certificate, embeddedCertificates);
+                                    signerRecord.certificate, embeddedCertificates,
+                                    trustStore.getTrustedCertificateAuthorities());
                         } else {
                             signerRecord.pathResult = new CertificatePathValidator.Result(
                                     CertificatePathValidator.Status.UNKNOWN,
@@ -339,7 +400,7 @@ public final class MainActivity extends Activity {
                         report.append("  Exact certificate pin: ")
                                 .append(signerRecord.certificate != null && trustStore.isTrusted(signerRecord.certificate)
                                         ? "TRUSTED LOCALLY IN THIS APP" : "NOT TRUSTED BY PIN").append("\n");
-                        report.append("  Android system PKIX path: ")
+                        report.append("  Certificate trust path: ")
                                 .append(signerRecord.pathResult.status.name()).append(" — ")
                                 .append(signerRecord.pathResult.summary).append("\n");
                         report.append("  Certificate validity at current device time: ")
@@ -414,7 +475,9 @@ public final class MainActivity extends Activity {
                     || record.signers.isEmpty()) return false;
             for (SignerRecord signer : record.signers) {
                 if (!signer.cryptoValid || signer.certificate == null || signer.fingerprint == null
-                        || !trustStore.isTrusted(signer.certificate)) return false;
+                        || signer.pathResult == null
+                        || (signer.pathResult.status != CertificatePathValidator.Status.TRUSTED_SYSTEM_PATH
+                            && signer.pathResult.status != CertificatePathValidator.Status.TRUSTED_APP_PATH)) return false;
                 try {
                     signer.certificate.checkValidity(new Date());
                 } catch (Exception invalidDate) {
