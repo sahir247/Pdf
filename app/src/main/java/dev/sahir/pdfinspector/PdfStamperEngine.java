@@ -1,6 +1,5 @@
 package dev.sahir.pdfinspector;
 
-import android.graphics.Color;
 import com.tom_roush.pdfbox.cos.COSArray;
 import com.tom_roush.pdfbox.cos.COSBase;
 import com.tom_roush.pdfbox.cos.COSDictionary;
@@ -31,14 +30,15 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Native PDF Box engine for signature appearance rectification and flattening.
- * Replaces unverified Adobe question-mark appearances with green checkmarks
- * and produces universal print-ready documents.
+ * Replaces unverified Adobe question-mark appearances with the official Adobe green checkmark
+ * (bold black stroke, drop shadow, Adobe green fill) and produces universal print-ready documents.
  */
 public final class PdfStamperEngine {
 
@@ -100,110 +100,80 @@ public final class PdfStamperEngine {
         if (acroForm == null) return 0;
 
         int count = 0;
-        Set<COSStream> visitedStreams = new HashSet<>();
+        Set<COSBase> visited = new HashSet<>();
 
         for (PDField field : acroForm.getFields()) {
-            if (field instanceof PDSignatureField || "Sig".equals(field.getFieldType())) {
-                for (PDAnnotationWidget widget : field.getWidgets()) {
-                    if (patchWidgetAppearance(document, widget, visitedStreams)) {
+            for (PDAnnotationWidget widget : field.getWidgets()) {
+                PDAppearanceDictionary appearance = widget.getAppearance();
+                if (appearance == null) continue;
+
+                PDAppearanceEntry normalEntry = appearance.getNormalAppearance();
+                if (normalEntry == null) continue;
+
+                if (normalEntry.isSubDictionary()) {
+                    for (Map.Entry<COSName, PDAppearanceStream> entry : normalEntry.getSubDictionary().entrySet()) {
+                        if (patchAppearanceStreamRecursive(document, entry.getValue(), visited)) {
+                            count++;
+                        }
+                    }
+                } else {
+                    PDAppearanceStream appStream = normalEntry.getAppearanceStream();
+                    if (appStream != null && patchAppearanceStreamRecursive(document, appStream, visited)) {
                         count++;
                     }
                 }
             }
         }
-
-        // Also inspect page annotations directly in case signature fields were not in AcroForm fields list
-        for (PDPage page : document.getPages()) {
-            try {
-                List<PDAnnotation> annotations = page.getAnnotations();
-                if (annotations == null) continue;
-                for (PDAnnotation annot : annotations) {
-                    if (annot instanceof PDAnnotationWidget) {
-                        PDAnnotationWidget widget = (PDAnnotationWidget) annot;
-                        if (patchWidgetAppearance(document, widget, visitedStreams)) {
-                            count++;
-                        }
-                    }
-                }
-            } catch (Exception ignored) { }
-        }
-
         return count;
     }
 
-    private static boolean patchWidgetAppearance(PDDocument document, PDAnnotationWidget widget, Set<COSStream> visited) {
-        PDAppearanceDictionary appearance = widget.getAppearance();
-        if (appearance == null) return false;
-
-        PDAppearanceEntry normalEntry = appearance.getNormalAppearance();
-        if (normalEntry == null) return false;
-
-        boolean modified = false;
-        if (normalEntry.isSubDictionary()) {
-            java.util.Map<COSName, PDAppearanceStream> subDict = normalEntry.getSubDictionary();
-            for (PDAppearanceStream stream : subDict.values()) {
-                if (stream != null && patchAppearanceStreamRecursive(document, stream, visited)) {
-                    modified = true;
-                }
-            }
-        } else {
-            PDAppearanceStream stream = normalEntry.getAppearanceStream();
-            if (stream != null) {
-                if (patchAppearanceStreamRecursive(document, stream, visited)) {
-                    modified = true;
-                }
-            }
-        }
-        return modified;
-    }
-
-    private static boolean patchAppearanceStreamRecursive(PDDocument document, PDAppearanceStream stream, Set<COSStream> visited) {
-        COSStream cosStream = stream.getCOSObject();
+    private static boolean patchAppearanceStreamRecursive(PDDocument document, PDAppearanceStream appStream, Set<COSBase> visited) {
+        if (appStream == null) return false;
+        COSStream cosStream = appStream.getCOSObject();
         if (visited.contains(cosStream)) return false;
         visited.add(cosStream);
 
         boolean changed = false;
 
-        // 1. Text substitution in stream content
+        // 1. Patch stream text directly (e.g. replace 'Signature Not Verified' with 'Signature valid')
         try {
-            byte[] rawBytes;
-            try (InputStream in = stream.getContentStream().createInputStream()) {
-                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-                byte[] temp = new byte[4096];
-                int read;
-                while ((read = in.read(temp)) != -1) {
-                    buffer.write(temp, 0, read);
-                }
-                rawBytes = buffer.toByteArray();
+            String originalContent;
+            try (InputStream in = cosStream.createInputStream()) {
+                originalContent = new String(in.readAllBytes(), StandardCharsets.ISO_8859_1);
             }
 
-            String content = new String(rawBytes, StandardCharsets.ISO_8859_1);
-            String patched = replaceUnverifiedText(content);
-
-            if (!content.equals(patched)) {
+            String modifiedContent = replaceUnverifiedText(originalContent);
+            if (!modifiedContent.equals(originalContent)) {
                 try (OutputStream out = cosStream.createOutputStream()) {
-                    out.write(patched.getBytes(StandardCharsets.ISO_8859_1));
+                    out.write(modifiedContent.getBytes(StandardCharsets.ISO_8859_1));
                 }
                 changed = true;
             }
         } catch (Exception ignored) { }
 
-        // 2. Resource XObject /n1 replacement
-        PDResources resources = stream.getResources();
+        // 2. Inspect Resources / XObjects for nested question mark (/n1) or nested form (/FRM)
+        PDResources resources = appStream.getResources();
         if (resources != null) {
-            COSDictionary resDict = resources.getCOSObject();
-            COSBase xobjectsBase = resDict.getDictionaryObject(COSName.XOBJECT);
-            if (xobjectsBase instanceof COSDictionary) {
-                COSDictionary xobjects = (COSDictionary) xobjectsBase;
-
-                // Replace /n1 icon XObject with green checkmark
+            COSDictionary xobjects = (COSDictionary) resources.getCOSObject().getDictionaryObject(COSName.XOBJECT);
+            if (xobjects != null) {
+                // Check if this dictionary directly contains /n1 (the question mark)
                 COSName n1Key = COSName.getPDFName("n1");
                 if (xobjects.containsKey(n1Key)) {
                     try {
-                        PDRectangle bbox = stream.getBBox();
+                        PDRectangle bbox = appStream.getBBox();
+                        COSBase existingN1 = xobjects.getDictionaryObject(n1Key);
+                        if (existingN1 instanceof COSStream) {
+                            try {
+                                PDFormXObject existingForm = new PDFormXObject((COSStream) existingN1);
+                                if (existingForm.getBBox() != null) {
+                                    bbox = existingForm.getBBox();
+                                }
+                            } catch (Exception ignored) { }
+                        }
+
                         float width = bbox != null ? Math.abs(bbox.getWidth()) : 100f;
-                        float height = bbox != null ? Math.abs(bbox.getHeight()) : 50f;
-                        PDFormXObject greenCheckmark = createGreenCheckmarkForm(document, width, height);
+                        float height = bbox != null ? Math.abs(bbox.getHeight()) : 100f;
+                        PDFormXObject greenCheckmark = createAdobeGreenCheckmarkForm(document, width, height);
                         xobjects.setItem(n1Key, greenCheckmark.getCOSObject());
                         changed = true;
                     } catch (Exception ignored) { }
@@ -214,13 +184,9 @@ public final class PdfStamperEngine {
                     COSBase item = xobjects.getDictionaryObject(key);
                     if (item instanceof COSStream) {
                         try {
-                            PDFormXObject childForm = new PDFormXObject((COSStream) item);
-                            PDResources childRes = childForm.getResources();
-                            if (childRes != null) {
-                                PDAppearanceStream childAppStream = new PDAppearanceStream((COSStream) item);
-                                if (patchAppearanceStreamRecursive(document, childAppStream, visited)) {
-                                    changed = true;
-                                }
+                            PDAppearanceStream childAppStream = new PDAppearanceStream((COSStream) item);
+                            if (patchAppearanceStreamRecursive(document, childAppStream, visited)) {
+                                changed = true;
                             }
                         } catch (Exception ignored) { }
                     }
@@ -232,7 +198,6 @@ public final class PdfStamperEngine {
     }
 
     private static String replaceUnverifiedText(String content) {
-        // Regex patterns for variations of "Signature Not Verified" or "Signature invalid"
         String[] targets = {
                 "(?i)\\(\\s*Signature\\s+Not\\s+Verified\\s*\\)",
                 "(?i)\\(\\s*Signature\\s+not\\s+verified\\s*\\)",
@@ -247,7 +212,6 @@ public final class PdfStamperEngine {
             result = result.replaceAll(pattern, "(Signature valid)");
         }
 
-        // Multi-token patterns: (Signature) (Not) (Verified)
         Pattern multiToken = Pattern.compile("\\(\\s*Signature\\s*\\)[\\s\\r\\n]*\\(\\s*Not\\s*\\)[\\s\\r\\n]*\\(\\s*Verified\\s*\\)", Pattern.CASE_INSENSITIVE);
         result = multiToken.matcher(result).replaceAll("(Signature valid) () ()");
 
@@ -258,56 +222,86 @@ public final class PdfStamperEngine {
     }
 
     /**
-     * Creates a PDFormXObject representing the verified green checkmark vector icon.
+     * Creates a PDFormXObject representing the verified green checkmark vector icon
+     * with Adobe-standard bold black stroke, 3D drop shadow, and Adobe green fill.
      */
-    private static PDFormXObject createGreenCheckmarkForm(PDDocument document, float width, float height) throws Exception {
+    private static PDFormXObject createAdobeGreenCheckmarkForm(PDDocument document, float width, float height) throws Exception {
         PDFormXObject form = new PDFormXObject(document);
         form.setBBox(new PDRectangle(0, 0, width, height));
 
-        // SVG Path: M 12 122 L 30 102 L 80 158 L 170 12 L 194 30 L 78 192 Z (original box: 200x200)
-        // Scaled and centered to fit bounding box
-        float scale = Math.min(width * 0.75f / 182f, height * 0.75f / 180f);
-        if (scale <= 0) scale = 0.2f;
+        // SVG Path: M 12 122 L 30 102 L 80 158 L 170 12 L 194 30 L 78 192 Z (box: 182x180)
+        // Scaled to fill 88% of width and height
+        float scale = Math.min(width * 0.88f / 182f, height * 0.88f / 180f);
+        if (scale <= 0) scale = 0.4f;
 
-        float offsetX = (width - (182f * scale)) / 2f - (12f * scale);
-        float offsetY = (height - (180f * scale)) / 2f + (12f * scale);
+        float cx = width / 2.0f;
+        float cy = height / 2.0f;
 
-        // Vector path coordinates inverted for PDF coordinate space (Y-up)
-        // In PDF: y_pdf = height - y_svg
-        float p1x = offsetX + 12f * scale;
-        float p1y = offsetY + (180f - 122f) * scale;
-        float p2x = offsetX + 30f * scale;
-        float p2y = offsetY + (180f - 102f) * scale;
-        float p3x = offsetX + 80f * scale;
-        float p3y = offsetY + (180f - 158f) * scale;
-        float p4x = offsetX + 170f * scale;
-        float p4y = offsetY + (180f - 12f) * scale;
-        float p5x = offsetX + 194f * scale;
-        float p5y = offsetY + (180f - 30f) * scale;
-        float p6x = offsetX + 78f * scale;
-        float p6y = offsetY + (180f - 192f) * scale;
+        float strokeWidth = Math.max(1.8f, 18f * scale);
+        float shadowOffsetX = 4f * scale;
+        float shadowOffsetY = 8f * scale;
 
-        StringBuilder streamContent = new StringBuilder();
-        streamContent.append("q\n");
-        // Non-stroking color: Adobe Green RGB (0, 180, 60) -> (0, 0.706, 0.235)
-        streamContent.append("0 0.706 0.235 rg\n");
-        // Stroking color: Dark Green RGB (0, 140, 45)
-        streamContent.append("0 0.549 0.176 RG\n");
-        streamContent.append("1.5 w\n");
-        streamContent.append(String.format(java.util.Locale.US, "%.2f %.2f m\n", p1x, p1y));
-        streamContent.append(String.format(java.util.Locale.US, "%.2f %.2f l\n", p2x, p2y));
-        streamContent.append(String.format(java.util.Locale.US, "%.2f %.2f l\n", p3x, p3y));
-        streamContent.append(String.format(java.util.Locale.US, "%.2f %.2f l\n", p4x, p4y));
-        streamContent.append(String.format(java.util.Locale.US, "%.2f %.2f l\n", p5x, p5y));
-        streamContent.append(String.format(java.util.Locale.US, "%.2f %.2f l\n", p6x, p6y));
-        streamContent.append("b\n"); // closepath, fill and stroke
-        streamContent.append("Q\n");
+        StringBuilder sb = new StringBuilder();
+
+        // Layer 1: Black Drop Shadow
+        sb.append("q\n");
+        sb.append("0 0 0 rg\n"); // Black fill
+        sb.append("0 0 0 RG\n"); // Black stroke
+        sb.append(String.format(Locale.US, "%.2f w 1 j 1 J\n", strokeWidth));
+        appendCheckmarkPath(sb, cx + shadowOffsetX, cy - shadowOffsetY, scale);
+        sb.append("b\n"); // fill and stroke
+        sb.append("Q\n");
+
+        // Layer 2: Black Border Outline
+        sb.append("q\n");
+        sb.append("0 0 0 rg\n"); // Black fill
+        sb.append("0 0 0 RG\n"); // Black stroke
+        sb.append(String.format(Locale.US, "%.2f w 1 j 1 J\n", strokeWidth));
+        appendCheckmarkPath(sb, cx, cy, scale);
+        sb.append("b\n"); // fill and stroke
+        sb.append("Q\n");
+
+        // Layer 3: Vibrant Adobe Green Fill
+        sb.append("q\n");
+        // Adobe Green RGB (0, 180, 60) -> (0, 0.706, 0.235)
+        sb.append("0 0.706 0.235 rg\n");
+        appendCheckmarkPath(sb, cx, cy, scale);
+        sb.append("f\n"); // fill only
+        sb.append("Q\n");
 
         try (OutputStream out = form.getCOSObject().createOutputStream()) {
-            out.write(streamContent.toString().getBytes(StandardCharsets.ISO_8859_1));
+            out.write(sb.toString().getBytes(StandardCharsets.ISO_8859_1));
         }
 
         return form;
+    }
+
+    private static void appendCheckmarkPath(StringBuilder sb, float cx, float cy, float scale) {
+        float p1x = cx + (12f - 103f) * scale;
+        float p1y = cy - (122f - 102f) * scale;
+
+        float p2x = cx + (30f - 103f) * scale;
+        float p2y = cy - (102f - 102f) * scale;
+
+        float p3x = cx + (80f - 103f) * scale;
+        float p3y = cy - (158f - 102f) * scale;
+
+        float p4x = cx + (170f - 103f) * scale;
+        float p4y = cy - (12f - 102f) * scale;
+
+        float p5x = cx + (194f - 103f) * scale;
+        float p5y = cy - (30f - 102f) * scale;
+
+        float p6x = cx + (78f - 103f) * scale;
+        float p6y = cy - (192f - 102f) * scale;
+
+        sb.append(String.format(Locale.US, "%.2f %.2f m\n", p1x, p1y));
+        sb.append(String.format(Locale.US, "%.2f %.2f l\n", p2x, p2y));
+        sb.append(String.format(Locale.US, "%.2f %.2f l\n", p3x, p3y));
+        sb.append(String.format(Locale.US, "%.2f %.2f l\n", p4x, p4y));
+        sb.append(String.format(Locale.US, "%.2f %.2f l\n", p5x, p5y));
+        sb.append(String.format(Locale.US, "%.2f %.2f l\n", p6x, p6y));
+        sb.append("h\n"); // close path
     }
 
     /**
@@ -330,7 +324,6 @@ public final class PdfStamperEngine {
                             if (appStream != null) {
                                 PDRectangle rect = widget.getRectangle();
                                 if (rect != null && rect.getWidth() > 0 && rect.getHeight() > 0) {
-                                    // Burn the appearance Form XObject onto the page
                                     try (PDPageContentStream contentStream = new PDPageContentStream(
                                             document, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
                                         contentStream.saveGraphicsState();
@@ -357,4 +350,3 @@ public final class PdfStamperEngine {
         } catch (Exception ignored) { }
     }
 }
-

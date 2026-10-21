@@ -496,8 +496,16 @@ public final class MainActivity extends AppCompatActivity {
         startActivityForResult(intent, PICK_TRUSTED_CA);
     }
 
+    private InputStream openUriInputStream(Uri uri) throws Exception {
+        if (uri == null) throw new IllegalArgumentException("URI is null");
+        if ("file".equalsIgnoreCase(uri.getScheme()) && uri.getPath() != null) {
+            return new java.io.FileInputStream(new File(uri.getPath()));
+        }
+        return getContentResolver().openInputStream(uri);
+    }
+
     private void loadPdfFromUri(Uri uri) {
-        try (InputStream in = getContentResolver().openInputStream(uri)) {
+        try (InputStream in = openUriInputStream(uri)) {
             if (in == null) throw new IllegalStateException("Unable to open selected document.");
             currentPdf = readBounded(in, MAX_PDF_BYTES);
             currentPdfName = queryDisplayName(uri);
