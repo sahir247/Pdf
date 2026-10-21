@@ -163,19 +163,7 @@ public final class PdfStamperEngine {
                 }
                 changed = true;
 
-                // When title stream (/n4) is patched, ensure font dictionary references Helvetica-Bold
-                PDResources titleRes = appStream.getResources();
-                if (titleRes != null) {
-                    COSDictionary fontDict = (COSDictionary) titleRes.getCOSObject().getDictionaryObject(COSName.FONT);
-                    if (fontDict != null) {
-                        for (COSName fontKey : fontDict.keySet()) {
-                            COSBase fontObj = fontDict.getDictionaryObject(fontKey);
-                            if (fontObj instanceof COSDictionary) {
-                                ((COSDictionary) fontObj).setName(COSName.BASE_FONT, "Helvetica-Bold");
-                            }
-                        }
-                    }
-                }
+                // Preserve existing font (Helvetica Regular) as in Adobe Acrobat DC
             }
         } catch (Exception ignored) { }
 
@@ -270,15 +258,15 @@ public final class PdfStamperEngine {
         sb.append("q\n");
         sb.append(String.format(Locale.US, "%.4f 0 0 %.4f 0 0 cm\n", scale, scale));
         sb.append("1 J 1 j 4 M [] 0 d\n");
-        // Layer 1: White outer border outline
-        sb.append("1 1 1 rg 1 1 1 RG 1.8 w\n");
-        sb.append("28.2 2.8 m 0 30.6 l 9.6 43.8 l 27.8 22.0 l 59.4 76.3 l 72.0 66.8 l h b\n");
-        // Layer 2: Black drop shadow
+        // Layer 1: Black 3D drop shadow (extruded to bottom-right)
         sb.append("0 G\n");
-        sb.append("31.0 0 m 4.2 26.6 l 12.0 37.0 l 30.2 15.3 l 62.3 69.9 l 73.5 61.7 l h f\n");
-        // Layer 3: Adobe Green fill (0, 0.7, 0.23 rg)
+        sb.append("31.1 0 m 4.2 26.6 l 12.0 37.0 l 30.2 15.3 l 62.3 69.9 l 73.5 61.7 l h f\n");
+        // Layer 2: Vibrant Adobe Green fill (0, 0.7, 0.23 rg)
         sb.append("0 0.7 0.23 rg\n");
         sb.append("28.8 3.8 m 1.9 30.4 l 9.8 40.9 l 28.0 19.2 l 60.0 73.8 l 71.3 65.5 l h f\n");
+        // Layer 3: Crisp black outer outline border stroke (1.4 w)
+        sb.append("0 G 1.4 w\n");
+        sb.append("28.8 3.8 m 1.9 30.4 l 9.8 40.9 l 28.0 19.2 l 60.0 73.8 l 71.3 65.5 l h S\n");
         sb.append("Q\n");
 
         try (OutputStream out = form.getCOSObject().createOutputStream()) {
