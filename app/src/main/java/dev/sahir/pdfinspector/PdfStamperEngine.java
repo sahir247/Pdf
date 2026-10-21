@@ -172,6 +172,22 @@ public final class PdfStamperEngine {
         if (resources != null) {
             COSDictionary xobjects = (COSDictionary) resources.getCOSObject().getDictionaryObject(COSName.XOBJECT);
             if (xobjects != null) {
+                // Check if this dictionary contains /n4 (title) and expand BBox if needed
+                COSName n4Key = COSName.getPDFName("n4");
+                if (xobjects.containsKey(n4Key)) {
+                    COSBase existingN4 = xobjects.getDictionaryObject(n4Key);
+                    if (existingN4 instanceof COSStream) {
+                        try {
+                            PDAppearanceStream n4Stream = new PDAppearanceStream((COSStream) existingN4);
+                            PDRectangle n4BBox = n4Stream.getBBox();
+                            if (n4BBox != null && n4BBox.getWidth() <= 65f) {
+                                n4Stream.setBBox(new PDRectangle(0, 0, n4BBox.getWidth(), Math.max(30f, n4BBox.getHeight())));
+                                changed = true;
+                            }
+                        } catch (Exception ignored) { }
+                    }
+                }
+
                 // Check if this dictionary directly contains /n1 (the question mark)
                 COSName n1Key = COSName.getPDFName("n1");
                 if (xobjects.containsKey(n1Key)) {
@@ -236,6 +252,13 @@ public final class PdfStamperEngine {
         Pattern twoToken = Pattern.compile("\\(\\s*Signature\\s+Not\\s*\\)[\\s\\r\\n]*\\(\\s*Verified\\s*\\)", Pattern.CASE_INSENSITIVE);
         result = twoToken.matcher(result).replaceAll("(Signature valid) ()");
 
+        // In compact Aadhaar stamps, normalize title baseline from 23.3 to 19.0 to match Adobe DC uniform leading
+        result = result.replaceAll("(\\d+(?:\\.\\d+)?)\\s+23\\.3\\s+Tm", "$1 19.0 Tm");
+
+        // Remove trailing timezone abbreviation line (e.g. IST) in compact stamps to match Adobe DC
+        result = result.replaceAll("(?m)^\\s*1\\s+0\\s+0\\s+1\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+Tm\\s*\\(IST\\)Tj\\s*[\\r\\n]*", "");
+        result = result.replaceAll("\\(IST\\)Tj", "");
+
         return result;
     }
 
@@ -256,20 +279,20 @@ public final class PdfStamperEngine {
             // Compact stamps (e.g. Aadhaar 50x30 pt):
             // Checkmark is calibrated to rest over 'Signature' and '2026.10.21'
             // Right tip terminates at 'u'/'r'/'e' of 'Signature' before 'valid', matching Adobe Acrobat DC
-            form.setBBox(new PDRectangle(-30, 0, 100, 100));
+            form.setBBox(new PDRectangle(-60, -20, 100, 100));
 
             StringBuilder sb = new StringBuilder();
             sb.append("q\n");
             sb.append("1 J 1 j 4 M [] 0 d\n");
-            // Layer 1: Subtle shadow (1px offset)
+            // Layer 1: Subtle shadow
             sb.append("0 G\n");
-            sb.append("2.61 24.77 m -18.37 47.56 l -12.23 56.51 l 2.01 37.89 l 27.05 84.65 l 35.81 77.60 l h f\n");
+            sb.append("-6.31 15.47 m -26.68 41.39 l -19.90 50.80 l -6.90 29.80 l 18.51 74.73 l 27.60 67.80 l h f\n");
             // Layer 2: Vibrant Adobe Green fill
             sb.append("0 0.7 0.23 rg\n");
-            sb.append("1.61 25.97 m -19.37 48.76 l -13.23 57.71 l 1.01 39.09 l 26.05 85.85 l 34.81 78.80 l h f\n");
-            // Layer 3: Crisp delicate black outline (1px)
-            sb.append("0 G 0.7 w\n");
-            sb.append("1.61 25.97 m -19.37 48.76 l -13.23 57.71 l 1.01 39.09 l 26.05 85.85 l 34.81 78.80 l h S\n");
+            sb.append("-7.41 16.67 m -27.78 42.59 l -21.00 52.00 l -8.00 31.00 l 17.41 75.93 l 26.50 69.00 l h f\n");
+            // Layer 3: Crisp black outline
+            sb.append("0 G 0.85 w\n");
+            sb.append("-7.41 16.67 m -27.78 42.59 l -21.00 52.00 l -8.00 31.00 l 17.41 75.93 l 26.50 69.00 l h S\n");
             sb.append("Q\n");
 
             try (OutputStream out = form.getCOSObject().createOutputStream()) {

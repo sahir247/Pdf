@@ -275,17 +275,22 @@ public final class DynamicSignatureOverlay {
         titlePaint.setTextSize(canvasTitleSize);
 
         float titleX = bounds.left + (layout.titleX >= 0 ? layout.titleX : 2.0f) * scaleX;
-        float titleY = bounds.bottom - (layout.titleY >= 0 ? layout.titleY : 23.3f) * scaleY;
+        float effectiveTitleY = (layout.titleY >= 0 ? layout.titleY : 23.3f);
+        if (widgetW <= 65f && !layout.lines.isEmpty()) {
+            // In compact stamps (e.g. Aadhaar), Adobe DC sets uniform leading: 1 step above Line 1
+            effectiveTitleY = layout.lines.get(0).y + 3.4f;
+        }
+        float titleY = bounds.bottom - effectiveTitleY * scaleY;
         String titleText = "Signature valid";
 
         // 3. Draw Adobe green checkmark vector using exact stream matrix or dynamic typography
         float checkCx, checkCy, checkSize;
         if (widgetW <= 65f) {
             // Compact stamp (e.g. Aadhaar 50x30 pt): Checkmark is calibrated to rest over 'Signature' and '2026.10.21'
-            // Right tip terminates at 'u'/'r'/'e' of 'Signature' before 'valid', matching Adobe Acrobat DC
-            float cxPdf = 13.58f;
-            float cyPdf = 16.60f;
-            float sizePdf = 16.2f;
+            // Matching Adobe Acrobat DC exact typography anchor
+            float cxPdf = 10.1f;
+            float cyPdf = 14.0f;
+            float sizePdf = 18.0f;
             checkCx = bounds.left + cxPdf * scaleX;
             checkCy = bounds.bottom - cyPdf * scaleY;
             checkSize = sizePdf * scaleY;
@@ -313,6 +318,9 @@ public final class DynamicSignatureOverlay {
         detailPaint.setTypeface(getRegularTypeface());
 
         for (AppearanceLayout.Line line : layout.lines) {
+            if (widgetW <= 65f && "IST".equalsIgnoreCase(line.text.trim())) {
+                continue; // Suppress timezone abbreviation line in compact stamps to match Adobe DC
+            }
             float lineSize = line.fontSize * scaleY;
             detailPaint.setTextSize(lineSize);
             float lx = bounds.left + line.x * scaleX;
