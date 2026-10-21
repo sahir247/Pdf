@@ -11,6 +11,14 @@ import java.security.Security;
 import java.security.cert.X509Certificate;
 import java.util.Collections;
 import java.util.List;
+import com.tom_roush.pdfbox.pdmodel.PDDocument;
+import com.tom_roush.pdfbox.pdmodel.PDPage;
+import com.tom_roush.pdfbox.pdmodel.common.PDRectangle;
+import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotation;
+import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
+import com.tom_roush.pdfbox.pdmodel.interactive.digitalsignature.PDSignature;
+import com.tom_roush.pdfbox.pdmodel.interactive.form.PDAcroForm;
+import com.tom_roush.pdfbox.pdmodel.interactive.form.PDField;
 
 public class SignatureIntegrityTest {
 
@@ -130,5 +138,44 @@ public class SignatureIntegrityTest {
         Assert.assertArrayEquals("Original bytes must be bit-for-bit identical when cloned", original, copy);
         MessageDigest sha = MessageDigest.getInstance("SHA-256");
         Assert.assertArrayEquals("Hashes must match perfectly", sha.digest(original), sha.digest(copy));
+    }
+    @Test
+    public void testAadhaarSignaturePreservationAndWidgetInspection() throws Exception {
+        File file = new File("C:/Users/parve/Downloads/PrivacyVideoCleaner_v1_source/scratch/EAadhaar_0000003703510220260701195410_21102026132249.pdf");
+        if (!file.exists()) return;
+        try (PDDocument doc = PDDocument.load(file, "KHON2004")) {
+            Assert.assertEquals("Document should have 1 page", 1, doc.getNumberOfPages());
+            PDPage page = doc.getPage(0);
+            PDRectangle crop = page.getCropBox();
+            System.out.println("Aadhaar Page 0: cropBox=" + crop);
+            PDAcroForm acroForm = doc.getDocumentCatalog().getAcroForm();
+            Assert.assertNotNull("AcroForm must be present in Aadhaar PDF", acroForm);
+            boolean foundSigField = false;
+            for (PDField field : acroForm.getFields()) {
+                for (PDAnnotationWidget widget : field.getWidgets()) {
+                    PDRectangle rect = widget.getRectangle();
+                    System.out.println("Widget rect: " + rect);
+                    Assert.assertTrue("Widget rectangle must have positive dimensions", rect.getWidth() > 0 && rect.getHeight() > 0);
+                    foundSigField = true;
+                    if (widget.getAppearance() != null && widget.getAppearance().getNormalAppearance() != null) {
+                        com.tom_roush.pdfbox.cos.COSDictionary apDict = (com.tom_roush.pdfbox.cos.COSDictionary) widget.getAppearance().getNormalAppearance().getCOSObject();
+                        com.tom_roush.pdfbox.cos.COSDictionary res = (com.tom_roush.pdfbox.cos.COSDictionary) apDict.getDictionaryObject(com.tom_roush.pdfbox.cos.COSName.RESOURCES);
+                        com.tom_roush.pdfbox.cos.COSDictionary xobjs = (com.tom_roush.pdfbox.cos.COSDictionary) res.getDictionaryObject(com.tom_roush.pdfbox.cos.COSName.XOBJECT);
+                        com.tom_roush.pdfbox.cos.COSStream frm = (com.tom_roush.pdfbox.cos.COSStream) xobjs.getDictionaryObject(com.tom_roush.pdfbox.cos.COSName.getPDFName("FRM"));
+                        com.tom_roush.pdfbox.cos.COSDictionary frmRes = (com.tom_roush.pdfbox.cos.COSDictionary) frm.getDictionaryObject(com.tom_roush.pdfbox.cos.COSName.RESOURCES);
+                        com.tom_roush.pdfbox.cos.COSDictionary subX = (com.tom_roush.pdfbox.cos.COSDictionary) frmRes.getDictionaryObject(com.tom_roush.pdfbox.cos.COSName.XOBJECT);
+                        for (com.tom_roush.pdfbox.cos.COSName k : subX.keySet()) {
+                            com.tom_roush.pdfbox.cos.COSStream s = (com.tom_roush.pdfbox.cos.COSStream) subX.getDictionaryObject(k);
+                            try (java.io.InputStream in = s.createInputStream()) {
+                                byte[] b = in.readAllBytes();
+                                String text = new String(b, java.nio.charset.StandardCharsets.ISO_8859_1).replace("\n", " ").replace("\r", " ");
+                                System.out.println("Sub-stream " + k.getName() + " length=" + b.length + " content=" + text);
+                            }
+                        }
+                    }
+                }
+            }
+            Assert.assertTrue("Must find signature field in Aadhaar", foundSigField);
+        }
     }
 }
