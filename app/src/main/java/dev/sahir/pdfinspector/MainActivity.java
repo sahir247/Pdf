@@ -392,7 +392,6 @@ public final class MainActivity extends Activity {
                 actions.addView(save);
                 verificationBadge.setText("✓  SIGNATURE VERIFIED");
                 verificationBadge.setVisibility(View.VISIBLE);
-                verificationBadge.setVisibility(View.GONE);
                 status.setTextColor(0xFF263746);
                 status.setBackground(roundBg(0xFFFFFFFF, 0xFFD9E0E7));
             } else {
