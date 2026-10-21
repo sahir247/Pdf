@@ -76,10 +76,20 @@ public final class PdfSignatureValidation {
         while (gapStart < gapEnd && whitespace(pdf[gapStart])) gapStart++;
         while (gapEnd > gapStart && whitespace(pdf[gapEnd - 1])) gapEnd--;
         boolean contentsGap = gapEnd - gapStart >= 2 && pdf[gapStart] == '<' && pdf[gapEnd - 1] == '>';
+        boolean hexContents = contentsGap;
+        if (contentsGap) {
+            for (int i = gapStart + 1; i < gapEnd - 1; i++) {
+                byte ch = pdf[i];
+                if (!whitespace(ch) && !isHex(ch)) {
+                    hexContents = false;
+                    break;
+                }
+            }
+        }
         checks.add(new Check("Excluded signature Contents gap",
-                contentsGap ? State.PASS : State.FAIL,
-                contentsGap ? "The excluded ByteRange gap has PDF hexadecimal-string delimiters."
-                        : "The excluded gap does not match a PDF hexadecimal string."));
+                hexContents ? State.PASS : State.FAIL,
+                hexContents ? "The excluded ByteRange gap is a PDF hexadecimal string with only hex digits/whitespace."
+                        : "The excluded gap is not a valid PDF hexadecimal Contents string."));
 
         if (end < pdf.length) {
             checks.add(new Check("Current-file coverage", State.REVIEW_REQUIRED,
@@ -184,6 +194,11 @@ public final class PdfSignatureValidation {
         COSBase current = value;
         while (current instanceof COSObject) current = ((COSObject) current).getObject();
         return current;
+    }
+
+    private static boolean isHex(byte value) {
+        return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f')
+                || (value >= 'A' && value <= 'F');
     }
 
     private static boolean whitespace(byte value) {
