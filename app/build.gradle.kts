@@ -37,6 +37,8 @@ android {
 }
 
 dependencies {
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0") {
         // pdfbox-android brings BC 1.72 transitively. Keep one BC family/version
         // on the runtime classpath; the app uses the explicitly pinned 1.85 artifacts below.
