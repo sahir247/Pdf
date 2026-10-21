@@ -53,6 +53,7 @@ public final class MainActivity extends Activity {
     private LinearLayout content;
     private LinearLayout actions;
     private TextView status;
+    private TextView verificationBadge;
     private TrustedCertificateStore trustStore;
     private byte[] currentPdf;
     private String currentPdfName = "No PDF selected";
@@ -108,10 +109,18 @@ public final class MainActivity extends Activity {
         addSpace(18);
         content.addView(pick);
 
+        verificationBadge = text("✓  SIGNATURE VERIFIED", 18, true, 0xFF176B37);
+        verificationBadge.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        verificationBadge.setPadding(dp(16), dp(14), dp(16), dp(14));
+        verificationBadge.setBackground(roundBg(0xFFE9F8EF, 0xFF76C893));
+        verificationBadge.setVisibility(View.GONE);
+        addSpace(12);
+        content.addView(verificationBadge);
+
         status = text("No document selected. Choose a digitally signed PDF to inspect its signatures.", 14, false, 0xFF263746);
         status.setPadding(dp(14), dp(14), dp(14), dp(14));
         status.setBackground(roundBg(0xFFFFFFFF, 0xFFD9E0E7));
-        addSpace(12);
+        addSpace(8);
         content.addView(status);
 
         actions = new LinearLayout(this);
@@ -204,6 +213,7 @@ public final class MainActivity extends Activity {
     private void inspectPdf() throws Exception {
         records.clear();
         actions.removeAllViews();
+        verificationBadge.setVisibility(View.GONE);
         StringBuilder report = new StringBuilder();
         report.append(currentPdfName).append("\n\n");
 
@@ -380,8 +390,11 @@ public final class MainActivity extends Activity {
                 save.setOnClickListener(v -> saveVerifiedPdfCopy());
                 addSpaceIn(actions, 12);
                 actions.addView(save);
-                status.setTextColor(0xFF176B37);
-                status.setBackground(roundBg(0xFFE9F8EF, 0xFF76C893));
+                verificationBadge.setText("✓  SIGNATURE VERIFIED");
+                verificationBadge.setVisibility(View.VISIBLE);
+                verificationBadge.setVisibility(View.GONE);
+                status.setTextColor(0xFF263746);
+                status.setBackground(roundBg(0xFFFFFFFF, 0xFFD9E0E7));
             } else {
                 report.append("\nOVERALL RESULT: REVIEW REQUIRED.\n");
                 report.append("A green tick requires valid CMS signature mathematics, an exact locally trusted signer certificate, ")
