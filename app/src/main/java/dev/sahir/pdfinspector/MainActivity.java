@@ -8,9 +8,11 @@ import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.TextUtils;
+import android.text.InputType;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -18,6 +20,7 @@ import android.widget.Toast;
 
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
 import com.tom_roush.pdfbox.pdmodel.PDDocument;
+import com.tom_roush.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import com.tom_roush.pdfbox.pdmodel.interactive.digitalsignature.PDSignature;
 
 import org.bouncycastle.cert.X509CertificateHolder;
@@ -50,6 +53,9 @@ public final class MainActivity extends Activity {
     private TrustedCertificateStore trustStore;
     private byte[] currentPdf;
     private String currentPdfName = "No PDF selected";
+    // Kept only in memory so trust changes can revalidate the currently opened encrypted PDF.
+    // Never persisted or logged.
+    private String currentPdfPassword = "";
     private final List<SignatureRecord> records = new ArrayList<>();
 
     private static final class SignatureRecord {
@@ -136,6 +142,7 @@ public final class MainActivity extends Activity {
             if (in == null) throw new IllegalStateException("Unable to open the selected document.");
             currentPdf = readBounded(in, MAX_PDF_BYTES);
             currentPdfName = queryDisplayName(uri);
+            currentPdfPassword = "";
             inspectPdf();
         } catch (Exception e) {
             currentPdf = null;
@@ -175,7 +182,14 @@ public final class MainActivity extends Activity {
         StringBuilder report = new StringBuilder();
         report.append(currentPdfName).append("\n\n");
 
-        try (PDDocument document = PDDocument.load(new ByteArrayInputStream(currentPdf))) {
+        final PDDocument loadedDocument;
+        try {
+            loadedDocument = PDDocument.load(new ByteArrayInputStream(currentPdf), currentPdfPassword);
+        } catch (InvalidPasswordException passwordError) {
+            showPasswordDialog(currentPdfPassword.length() > 0);
+            return;
+        }
+        try (PDDocument document = loadedDocument) {
             List<PDSignature> signatures = document.getSignatureDictionaries();
             if (signatures == null || signatures.isEmpty()) {
                 showStatus(report.append("No embedded PDF digital signatures were found.\n")
@@ -335,6 +349,55 @@ public final class MainActivity extends Activity {
                     .append("analysis is not implemented. Exact pins do not override expiry, revocation, invalid cryptography, or document changes.");
             showStatus(report.toString());
         }
+    }
+
+    private void showPasswordDialog(boolean previousAttemptFailed) {
+        if (currentPdf == null) {
+            showStatus("Choose the PDF again before entering its password.");
+            return;
+        }
+
+        EditText passwordInput = new EditText(this);
+        passwordInput.setSingleLine(true);
+        passwordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        passwordInput.setHint("PDF document password");
+        passwordInput.setText("");
+        passwordInput.setSelection(0);
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(20), dp(8), dp(20), dp(4));
+        panel.addView(text(previousAttemptFailed
+                ? "That password was not accepted. Check it and try again."
+                : "This PDF is password-protected. Enter its document-open password to inspect its signatures.",
+                14, false, 0xFF263746));
+        addDialogSpace(panel, 10);
+        panel.addView(passwordInput);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(previousAttemptFailed ? "Incorrect PDF password" : "Password-protected PDF")
+                .setView(panel)
+                .setNegativeButton("Cancel", (d, which) -> {
+                    currentPdfPassword = "";
+                    showStatus(currentPdfName + "\\n\\nInspection cancelled. This PDF requires a password; no signature checks were performed.");
+                })
+                .setPositiveButton("Unlock and inspect", null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            Button positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            positive.setOnClickListener(v -> {
+                String candidate = passwordInput.getText().toString();
+                currentPdfPassword = candidate;
+                dialog.dismiss();
+                try {
+                    inspectPdf();
+                } catch (Exception e) {
+                    showStatus("Could not inspect PDF\\n" + safeMessage(e)
+                            + "\\n\\nThe password may be correct, but the file may be malformed, too large, or unsupported.");
+                }
+            });
+        });
+        dialog.show();
+        passwordInput.requestFocus();
     }
 
     /**
