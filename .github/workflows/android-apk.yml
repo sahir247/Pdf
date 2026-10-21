@@ -37,6 +37,9 @@ jobs:
       - name: Configure Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install Android platform and build tools
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
       - name: Build debug APK
         run: gradle --no-daemon --stacktrace assembleDebug
 
