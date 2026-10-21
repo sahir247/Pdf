@@ -138,6 +138,11 @@ public final class MainActivity extends Activity {
         addSpace(8);
         content.addView(importCa);
 
+        Button manageCa = button("Manage trusted CA anchors");
+        manageCa.setOnClickListener(v -> showTrustedCaAnchors());
+        addSpace(8);
+        content.addView(manageCa);
+
         TextView caveat = text("A green tick requires valid CMS cryptography, current certificate validity, full-file ByteRange coverage, and a certificate path to an Android system CA or a CA you explicitly imported into this app. A leaf-certificate pin alone is not a trusted issuer chain. Revocation, trusted timestamps, and complete PDF revision / DocMDP / FieldMDP analysis remain unimplemented. Saving exports the original PDF bytes unchanged.", 12, false, 0xFF6A4B12);
         caveat.setPadding(dp(12), dp(12), dp(12), dp(12));
         caveat.setBackground(roundBg(0xFFFFF4D6, 0xFFFFE0A3));
@@ -157,6 +162,43 @@ public final class MainActivity extends Activity {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
         startActivityForResult(intent, PICK_TRUSTED_CA);
+    }
+
+    private void showTrustedCaAnchors() {
+        List<X509Certificate> certificates = trustStore.getTrustedCertificateAuthorities();
+        if (certificates.isEmpty()) {
+            new AlertDialog.Builder(this).setTitle("Trusted CA anchors")
+                    .setMessage("No app-specific CA trust anchors have been imported.")
+                    .setPositiveButton("Close", null).show();
+            return;
+        }
+        String[] labels = new String[certificates.size()];
+        String[] fingerprints = new String[certificates.size()];
+        for (int i = 0; i < certificates.size(); i++) {
+            X509Certificate certificate = certificates.get(i);
+            try {
+                fingerprints[i] = TrustedCertificateStore.fingerprint(certificate);
+            } catch (Exception e) {
+                fingerprints[i] = "";
+            }
+            labels[i] = certificate.getSubjectX500Principal().getName()
+                    + "\\nSHA-256: " + fingerprints[i];
+        }
+        new AlertDialog.Builder(this).setTitle("App trusted CA anchors")
+                .setItems(labels, (dialog, which) -> {
+                    String fingerprint = fingerprints[which];
+                    new AlertDialog.Builder(this)
+                            .setTitle("Remove CA trust anchor?")
+                            .setMessage("Removing this anchor can make signatures that depend on it untrusted in this app. This does not change Android or Adobe trust settings.")
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Remove", (d, w) -> {
+                                trustStore.removeTrustedCertificateAuthority(fingerprint);
+                                toast("CA trust anchor removed.");
+                                if (currentPdf != null) {
+                                    try { inspectPdf(); } catch (Exception e) { showStatus(safeMessage(e)); }
+                                }
+                            }).show();
+                }).setNegativeButton("Close", null).show();
     }
 
     private void reviewTrustedCa(Uri uri) {
