@@ -178,4 +178,29 @@ public class SignatureIntegrityTest {
             Assert.assertTrue("Must find signature field in Aadhaar", foundSigField);
         }
     }
+
+    @Test
+    public void testProcessPdfAndSaveHighResCopies() throws Exception {
+        File scratchDir = new File("C:/Users/parve/Downloads/PrivacyVideoCleaner_v1_source/scratch");
+
+        // Income PDF
+        File incomeFile = new File(scratchDir, "income.pdf");
+        if (incomeFile.exists()) {
+            byte[] bytes = java.nio.file.Files.readAllBytes(incomeFile.toPath());
+            PdfStamperEngine.StampResult res = PdfStamperEngine.processPdf(bytes, null);
+            java.nio.file.Files.write(new File(scratchDir, "income_app_rectified.pdf").toPath(), res.rectifiedPdf);
+            java.nio.file.Files.write(new File(scratchDir, "income_app_printable.pdf").toPath(), res.printablePdf);
+            System.out.println("Saved income_app_rectified.pdf (" + res.rectifiedPdf.length + " bytes)");
+        }
+
+        // Aadhaar PDF
+        File aadhaarFile = new File(scratchDir, "eaadhaar.pdf");
+        if (aadhaarFile.exists()) {
+            byte[] bytes = java.nio.file.Files.readAllBytes(aadhaarFile.toPath());
+            PdfStamperEngine.StampResult res = PdfStamperEngine.processPdf(bytes, "KHON2004");
+            java.nio.file.Files.write(new File(scratchDir, "eaadhaar_app_rectified.pdf").toPath(), res.rectifiedPdf);
+            java.nio.file.Files.write(new File(scratchDir, "eaadhaar_app_printable.pdf").toPath(), res.printablePdf);
+            System.out.println("Saved eaadhaar_app_rectified.pdf (" + res.rectifiedPdf.length + " bytes)");
+        }
+    }
 }

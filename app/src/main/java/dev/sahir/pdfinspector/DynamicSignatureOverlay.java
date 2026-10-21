@@ -1,5 +1,6 @@
 package dev.sahir.pdfinspector;
 
+import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -88,6 +89,47 @@ public final class DynamicSignatureOverlay {
     private static final float TIP_OFFSET_DY = 3.3f - BBOX_CENTER_Y;  // -45.85f
 
     private DynamicSignatureOverlay() { }
+
+    private static volatile Typeface sBoldTypeface = null;
+    private static volatile Typeface sRegularTypeface = null;
+
+    /**
+     * Initializes exact Adobe-standard typography from bundled assets.
+     */
+    public static void init(Context context) {
+        if (context == null) return;
+        if (sBoldTypeface == null) {
+            try {
+                sBoldTypeface = Typeface.createFromAsset(context.getAssets(), "fonts/Helvetica-Bold.ttf");
+            } catch (Exception e1) {
+                try {
+                    sBoldTypeface = Typeface.createFromAsset(context.getAssets(), "fonts/MyriadPro-Bold.otf");
+                } catch (Exception e2) {
+                    sBoldTypeface = Typeface.create("sans-serif", Typeface.BOLD);
+                }
+            }
+        }
+        if (sRegularTypeface == null) {
+            try {
+                sRegularTypeface = Typeface.createFromAsset(context.getAssets(), "fonts/Helvetica-Regular.ttf");
+            } catch (Exception e1) {
+                try {
+                    sRegularTypeface = Typeface.createFromAsset(context.getAssets(), "fonts/MyriadPro-Regular.otf");
+                } catch (Exception e2) {
+                    sRegularTypeface = Typeface.create("sans-serif", Typeface.NORMAL);
+                }
+            }
+        }
+    }
+
+    public static Typeface getBoldTypeface() {
+        return sBoldTypeface != null ? sBoldTypeface : Typeface.create("sans-serif", Typeface.BOLD);
+    }
+
+    public static Typeface getRegularTypeface() {
+        return sRegularTypeface != null ? sRegularTypeface : Typeface.create("sans-serif", Typeface.NORMAL);
+    }
+
 
     public static class AppearanceLayout {
         public float widgetWidth = -1f;
@@ -227,7 +269,7 @@ public final class DynamicSignatureOverlay {
         // 2. Prepare "Signature valid" title paint and baseline coordinates
         Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         titlePaint.setColor(TEXT_BLACK);
-        titlePaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        titlePaint.setTypeface(getBoldTypeface());
 
         float canvasTitleSize = (layout.titleFontSize > 0 ? layout.titleFontSize : 4.7f) * scaleY;
         titlePaint.setTextSize(canvasTitleSize);
@@ -236,9 +278,22 @@ public final class DynamicSignatureOverlay {
         float titleY = bounds.bottom - (layout.titleY >= 0 ? layout.titleY : 23.3f) * scaleY;
         String titleText = "Signature valid";
 
-        // 3. Draw Adobe green checkmark vector with dynamic positioning
-        CheckmarkPosition pos = calculateDynamicCheckmarkPosition(titlePaint, titleText, titleX, titleY, canvasTitleSize);
-        drawAdobeCheckmark(canvas, pos.cx, pos.cy, pos.size);
+        // 3. Draw Adobe green checkmark vector using exact stream matrix or dynamic typography
+        float checkCx, checkCy, checkSize;
+        if (layout.n1Scale > 0) {
+            float sizePdf = 100.0f * layout.n1Scale;
+            float cxPdf = layout.n1Tx + BBOX_CENTER_X * layout.n1Scale;
+            float cyPdf = layout.n1Ty + (100.0f - BBOX_CENTER_Y) * layout.n1Scale;
+            checkCx = bounds.left + cxPdf * scaleX;
+            checkCy = bounds.bottom - cyPdf * scaleY;
+            checkSize = sizePdf * scaleY;
+        } else {
+            CheckmarkPosition pos = calculateDynamicCheckmarkPosition(titlePaint, titleText, titleX, titleY, canvasTitleSize);
+            checkCx = pos.cx;
+            checkCy = pos.cy;
+            checkSize = pos.size;
+        }
+        drawAdobeCheckmark(canvas, checkCx, checkCy, checkSize);
 
         // 4. Draw "Signature valid" title on top
         canvas.drawText(titleText, titleX, titleY, titlePaint);
@@ -246,7 +301,7 @@ public final class DynamicSignatureOverlay {
         // 5. Draw detail lines at exact /n2 baselines
         Paint detailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         detailPaint.setColor(TEXT_BLACK);
-        detailPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
+        detailPaint.setTypeface(getRegularTypeface());
 
         for (AppearanceLayout.Line line : layout.lines) {
             float lineSize = line.fontSize * scaleY;
@@ -297,12 +352,12 @@ public final class DynamicSignatureOverlay {
 
         Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         titlePaint.setColor(TEXT_BLACK);
-        titlePaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        titlePaint.setTypeface(getBoldTypeface());
         titlePaint.setTextSize(titleSize);
 
         Paint detailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         detailPaint.setColor(TEXT_BLACK);
-        detailPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
+        detailPaint.setTypeface(getRegularTypeface());
         detailPaint.setTextSize(detailSize);
 
         float textLeft = bounds.left + width * 0.04f;
@@ -424,7 +479,7 @@ public final class DynamicSignatureOverlay {
 
         Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         textPaint.setColor(Color.rgb(230, 81, 0)); // Amber/Orange
-        textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        textPaint.setTypeface(getBoldTypeface());
         textPaint.setTextSize(Math.max(10f, bounds.height() * 0.4f));
         textPaint.setTextAlign(Paint.Align.CENTER);
         canvas.drawText("?", bounds.centerX(), bounds.centerY() + textPaint.getTextSize() * 0.35f, textPaint);

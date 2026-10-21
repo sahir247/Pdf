@@ -56,6 +56,7 @@ public final class PdfPrintDocumentAdapter extends PrintDocumentAdapter {
     public PdfPrintDocumentAdapter(Context context, byte[] pdfBytes, String password, String documentName,
                                    boolean isVerified, String signerName, String signingDate) {
         this.context = context;
+        DynamicSignatureOverlay.init(context);
         this.pdfBytes = pdfBytes;
         this.password = password;
         this.documentName = documentName;

@@ -112,6 +112,7 @@ public final class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         PDFBoxResourceLoader.init(getApplicationContext());
+        DynamicSignatureOverlay.init(this);
         Security.removeProvider("BC");
         Security.insertProviderAt(new BouncyCastleProvider(), 1);
         trustStore = new TrustedCertificateStore(this);
