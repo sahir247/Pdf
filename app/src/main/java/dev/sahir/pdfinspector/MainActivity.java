@@ -114,7 +114,7 @@ public final class MainActivity extends Activity {
         addSpace(12);
         content.addView(manage);
 
-        TextView caveat = text("Security scope: app-private trust only. This prototype verifies PDF CMS signatures and stores exact certificate pins. It does not yet perform CRL/OCSP revocation checks or complete PDF revision / DocMDP analysis. Unknown revocation status will never be presented as a full green-check validation.", 12, false, 0xFF6A4B12);
+        TextView caveat = text("Security scope: exact signer-certificate pins are stored only in this app. The inspector reports CMS signature mathematics, structural ByteRange checks and an Android system PKIX path separately. CRL/OCSP revocation, trusted timestamps, complete incremental-revision analysis and DocMDP/FieldMDP permissions are not implemented. This build always requires review and never claims a full green-check validation.", 12, false, 0xFF6A4B12);
         caveat.setPadding(dp(12), dp(12), dp(12), dp(12));
         caveat.setBackground(roundBg(0xFFFFF4D6, 0xFFFFE0A3));
         addSpace(16);
