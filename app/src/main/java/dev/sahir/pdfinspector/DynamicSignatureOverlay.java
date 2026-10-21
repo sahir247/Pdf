@@ -20,6 +20,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -42,6 +43,49 @@ public final class DynamicSignatureOverlay {
 
     public static final int ADOBE_GREEN = Color.rgb(0, 161, 40); // #00A128 Adobe Acrobat green
     public static final int TEXT_BLACK = Color.BLACK;
+
+    // Adobe Acrobat DC DigSig.api native vector coordinates (% DSDoubleValid)
+    // Normalized to [0 .. 100] canvas coordinate system:
+    // Green checkmark path (0 0.7 0.23 rg):
+    // 377 50 m, 25 399 l, 128 536 l, 367 251 l, 787 967 l, 934 859 l
+    private static final float[][] ADOBE_GREEN_PTS = {
+            {37.7f, 95.0f},
+            {2.5f,  60.1f},
+            {12.8f, 46.4f},
+            {36.7f, 74.9f},
+            {78.7f, 3.3f},  // Top-most tip
+            {93.4f, 14.1f}
+    };
+
+    // Black drop shadow path (0 g):
+    // 406 0 m, 55 349 l, 157 485 l, 396 200 l, 817 916 l, 963 808 l
+    private static final float[][] ADOBE_SHADOW_PTS = {
+            {40.6f, 100.0f},
+            {5.5f,  65.1f},
+            {15.7f, 51.5f},
+            {39.6f, 80.0f},
+            {81.7f, 8.4f},
+            {96.3f, 19.2f}
+    };
+
+    // White background outline path (1 g):
+    // 370 37 m, 0 401 l, 126 574 l, 365 289 l, 779 1000 l, 944 876 l
+    private static final float[][] ADOBE_WHITE_PTS = {
+            {37.0f, 96.3f},
+            {0.0f,  59.9f},
+            {12.6f, 42.6f},
+            {36.5f, 71.1f},
+            {77.9f, 0.0f},
+            {94.4f, 12.4f}
+    };
+
+    // Centroid of the bounding box [2.5, 93.4] x [3.3, 95.0]
+    private static final float BBOX_CENTER_X = 47.95f;
+    private static final float BBOX_CENTER_Y = 49.15f;
+
+    // Mathematical vector from checkmark centroid to the top tip (78.7f, 3.3f)
+    private static final float TIP_OFFSET_DX = 78.7f - BBOX_CENTER_X; // +30.75f
+    private static final float TIP_OFFSET_DY = 3.3f - BBOX_CENTER_Y;  // -45.85f
 
     private DynamicSignatureOverlay() { }
 
@@ -84,6 +128,60 @@ public final class DynamicSignatureOverlay {
             }
             return list;
         }
+    }
+
+    public static class CheckmarkPosition {
+        public final float cx;
+        public final float cy;
+        public final float size;
+
+        public CheckmarkPosition(float cx, float cy, float size) {
+            this.cx = cx;
+            this.cy = cy;
+            this.size = size;
+        }
+    }
+
+    /**
+     * Dynamically calculates checkmark size and centroid position grounded in Adobe Acrobat DC typography.
+     *
+     * Rules:
+     * 1. Checkmark size is dynamically proportional to the title font size: 2.90 * titleFontSize.
+     * 2. Checkmark top tip terminates inside the letter 'a' of the word "valid" (or at 68% of title line width).
+     * 3. Tip Y terminates at 0.48 * titleFontSize above the title baseline.
+     * 4. Centroid (cx, cy) is dynamically resolved by subtracting the exact REA centroid-to-tip vector.
+     */
+    public static CheckmarkPosition calculateDynamicCheckmarkPosition(
+            Paint titlePaint, String titleText, float titleX, float titleBaselineY, float titleFontSize) {
+
+        float checkSize = 2.90f * titleFontSize;
+        float checkScale = checkSize / 100.0f;
+
+        // Dynamic tip X calculation: anchor inside 'a' of "valid" if present, or ~68% along title
+        float tipX;
+        String text = titleText != null ? titleText : "Signature valid";
+        String lower = text.toLowerCase(Locale.ROOT);
+        int validIdx = lower.indexOf("valid");
+        if (validIdx >= 0) {
+            float prefixWidth = titlePaint.measureText(text.substring(0, validIdx));
+            float vWidth = titlePaint.measureText(text.substring(validIdx, Math.min(validIdx + 1, text.length())));
+            float aWidth = (validIdx + 1 < text.length())
+                    ? titlePaint.measureText(text.substring(validIdx + 1, Math.min(validIdx + 2, text.length())))
+                    : titleFontSize * 0.55f;
+            tipX = titleX + prefixWidth + vWidth + 0.30f * aWidth;
+        } else {
+            float fullWidth = titlePaint.measureText(text);
+            tipX = titleX + 0.68f * fullWidth;
+        }
+
+        // Tip Y: 0.48 * fontSize above baseline
+        float tipY = titleBaselineY - 0.48f * titleFontSize;
+
+        // Invert the centroid-to-tip vector: cx = tipX - dx * scale, cy = tipY - dy * scale
+        float cx = tipX - TIP_OFFSET_DX * checkScale;
+        float cy = tipY - TIP_OFFSET_DY * checkScale;
+
+        return new CheckmarkPosition(cx, cy, checkSize);
     }
 
     public static void drawSignatureBadge(Canvas canvas, RectF bounds, String signerName, String signingDate, boolean isVerified) {
@@ -129,34 +227,21 @@ public final class DynamicSignatureOverlay {
         // 2. Prepare "Signature valid" title paint and baseline coordinates
         Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         titlePaint.setColor(TEXT_BLACK);
-        if (layout.titleFontSize >= 8.0f) {
-            titlePaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
-        } else {
-            titlePaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-        }
+        titlePaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+
         float canvasTitleSize = (layout.titleFontSize > 0 ? layout.titleFontSize : 4.7f) * scaleY;
         titlePaint.setTextSize(canvasTitleSize);
 
         float titleX = bounds.left + (layout.titleX >= 0 ? layout.titleX : 2.0f) * scaleX;
         float titleY = bounds.bottom - (layout.titleY >= 0 ? layout.titleY : 23.3f) * scaleY;
+        String titleText = "Signature valid";
 
-        // 3. Draw Adobe green checkmark vector
-        // In Adobe Acrobat DC, the checkmark top tip terminates precisely in the letter 'a' of "valid":
-        float widthSigV = titlePaint.measureText("Signature v");
-        float widthA = titlePaint.measureText("a");
-        float tipX = titleX + widthSigV + 0.35f * widthA;
-        float tipY = titleY - 0.45f * canvasTitleSize;
-
-        float checkSize = (layout.n1Scale > 0 ? layout.n1Scale * (layout.titleFontSize >= 8.0f ? 72.0f : 44.0f) : canvasTitleSize * 2.55f) * scaleY;
-        float checkScale = checkSize / 100.0f;
-
-        float iconCx = tipX - 36.0f * checkScale;
-        float iconCy = tipY + 50.0f * checkScale;
-
-        drawAdobeCheckmark(canvas, iconCx, iconCy, checkSize);
+        // 3. Draw Adobe green checkmark vector with dynamic positioning
+        CheckmarkPosition pos = calculateDynamicCheckmarkPosition(titlePaint, titleText, titleX, titleY, canvasTitleSize);
+        drawAdobeCheckmark(canvas, pos.cx, pos.cy, pos.size);
 
         // 4. Draw "Signature valid" title on top
-        canvas.drawText("Signature valid", titleX, titleY, titlePaint);
+        canvas.drawText(titleText, titleX, titleY, titlePaint);
 
         // 5. Draw detail lines at exact /n2 baselines
         Paint detailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -250,75 +335,63 @@ public final class DynamicSignatureOverlay {
             drawSignatureTextInternal(canvas, bannerTextLeft, bounds.top, titlePaint, detailPaint, titleSize, lineSpacing, linesToDraw);
         } else {
             // Standard rectangular signature (Aadhaar, eSign)
-            float widthSigV = titlePaint.measureText("Signature v");
-            float widthA = titlePaint.measureText("a");
-            float tipX = textLeft + widthSigV + 0.35f * widthA;
-            float tipY = bounds.top + titleSize - 0.45f * titleSize;
+            float titleX = textLeft;
+            float titleBaselineY = bounds.top + titleSize;
+            String titleText = "Signature valid";
 
-            float checkSize = titleSize * 2.55f;
-            float checkScale = checkSize / 100.0f;
-            float iconCx = tipX - 36.0f * checkScale;
-            float iconCy = tipY + 50.0f * checkScale;
-
-            drawAdobeCheckmark(canvas, iconCx, iconCy, checkSize);
+            CheckmarkPosition pos = calculateDynamicCheckmarkPosition(titlePaint, titleText, titleX, titleBaselineY, titleSize);
+            drawAdobeCheckmark(canvas, pos.cx, pos.cy, pos.size);
             drawSignatureTextInternal(canvas, textLeft, bounds.top, titlePaint, detailPaint, titleSize, lineSpacing, linesToDraw);
         }
     }
 
     /**
-     * Draws the Adobe-standard verified checkmark vector with black drop shadow, outline, and green fill.
+     * Draws the Adobe-standard verified checkmark vector with white underlay, drop shadow, outline, and green fill.
      */
     public static void drawAdobeCheckmark(Canvas canvas, float cx, float cy, float size) {
         if (size <= 0) size = 20f;
         float scale = size / 100.0f;
 
-        float shadowOffsetX = 2.5f * scale;
-        float shadowOffsetY = 3.8f * scale;
-        float strokeWidth = Math.max(1.0f, 1.6f * scale);
+        // 1. White protective underlay
+        Path whitePath = new Path();
+        buildAdobeVectorPath(whitePath, ADOBE_WHITE_PTS, cx, cy, scale);
+        Paint whitePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        whitePaint.setColor(Color.WHITE);
+        whitePaint.setStyle(Paint.Style.FILL);
+        canvas.drawPath(whitePath, whitePaint);
 
-        // Normalized Adobe 6-point checkmark path:
-        // (0, 62), (8, 51), (38, 77), (86, 0), (100, 11), (36, 100)
-        Path path = new Path();
-        createCheckmarkPath(path, cx, cy, scale);
-
-        // 1. Black Drop Shadow
+        // 2. Black drop shadow
         Path shadowPath = new Path();
-        createCheckmarkPath(shadowPath, cx + shadowOffsetX, cy + shadowOffsetY, scale);
+        buildAdobeVectorPath(shadowPath, ADOBE_SHADOW_PTS, cx, cy, scale);
         Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         shadowPaint.setColor(Color.BLACK);
         shadowPaint.setStyle(Paint.Style.FILL);
         canvas.drawPath(shadowPath, shadowPaint);
 
-        // 2. Black Outer Border Outline
+        // 3. Vibrant Adobe Green fill (#00A128)
+        Path greenPath = new Path();
+        buildAdobeVectorPath(greenPath, ADOBE_GREEN_PTS, cx, cy, scale);
+        Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        fillPaint.setColor(ADOBE_GREEN);
+        fillPaint.setStyle(Paint.Style.FILL);
+        canvas.drawPath(greenPath, fillPaint);
+
+        // 4. Black outer stroke outline (15 w in 1000-grid = 1.5% of size)
+        float strokeWidth = Math.max(1.0f, 1.5f * scale);
         Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         strokePaint.setColor(Color.BLACK);
         strokePaint.setStyle(Paint.Style.STROKE);
         strokePaint.setStrokeWidth(strokeWidth);
         strokePaint.setStrokeJoin(Paint.Join.MITER);
         strokePaint.setStrokeCap(Paint.Cap.SQUARE);
-        canvas.drawPath(path, strokePaint);
-
-        // 3. Vibrant Adobe Green Fill (#00A128)
-        Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        fillPaint.setColor(ADOBE_GREEN);
-        fillPaint.setStyle(Paint.Style.FILL);
-        canvas.drawPath(path, fillPaint);
+        canvas.drawPath(greenPath, strokePaint);
     }
 
-    private static void createCheckmarkPath(Path path, float cx, float cy, float scale) {
-        float[][] pts = {
-                {0f, 62f},
-                {8f, 51f},
-                {38f, 77f},
-                {86f, 0f},
-                {100f, 11f},
-                {36f, 100f}
-        };
-
+    private static void buildAdobeVectorPath(Path path, float[][] pts, float cx, float cy, float scale) {
         path.reset();
         for (int i = 0; i < pts.length; i++) {
-            float x = cx + (pts[i][0] - 50f) * scale;
-            float y = cy + (pts[i][1] - 50f) * scale;
+            float x = cx + (pts[i][0] - BBOX_CENTER_X) * scale;
+            float y = cy + (pts[i][1] - BBOX_CENTER_Y) * scale;
             if (i == 0) {
                 path.moveTo(x, y);
             } else {
