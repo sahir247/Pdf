@@ -237,7 +237,7 @@ public final class MainActivity extends Activity {
                 output.putExtra(Intent.EXTRA_TITLE, pendingSaveName);
                 startActivityForResult(output, SAVE_SIGNED_PDF);
             } catch (Exception e) {
-                java.util.Arrays.fill(password, '\\0');
+                java.util.Arrays.fill(password, '\0');
                 toast("Signing failed: " + safeMessage(e));
             }
         }));
