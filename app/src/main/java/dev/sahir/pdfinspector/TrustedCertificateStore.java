@@ -20,7 +20,8 @@ import java.util.Map;
 public final class TrustedCertificateStore {
     private static final String PREFS = "trusted_signer_certificates_v1";
     private static final String AUDIT_PREFIX = "audit:";
-    private static final int POLICY_VERSION = 1;
+    private static final String CA_PREFIX = "ca:";
+    private static final int POLICY_VERSION = 2;
     private final SharedPreferences preferences;
 
     public static final class TrustMetadata {
@@ -112,11 +113,64 @@ public final class TrustedCertificateStore {
                 .commit();
     }
 
+    /** Store a CA certificate as an explicit app-local PKIX trust anchor. */
+    public void trustCertificateAuthority(X509Certificate certificate) throws Exception {
+        if (certificate == null || certificate.getBasicConstraints() < 0) {
+            throw new SecurityException("A CA certificate is required.");
+        }
+        boolean[] usage = certificate.getKeyUsage();
+        if (usage != null && (usage.length <= 5 || !usage[5])) {
+            throw new SecurityException("CA key usage does not permit certificate signing.");
+        }
+        certificate.checkValidity(new java.util.Date());
+        String fp = fingerprint(certificate);
+        String encoded = Base64.encodeToString(certificate.getEncoded(), Base64.NO_WRAP);
+        boolean saved = preferences.edit().putString(CA_PREFIX + fp, encoded).commit();
+        if (!saved || !isTrustedCertificateAuthority(certificate)) {
+            throw new IllegalStateException("Could not persist or verify the CA trust anchor.");
+        }
+    }
+
+    public boolean isTrustedCertificateAuthority(X509Certificate certificate) {
+        try {
+            String key = CA_PREFIX + fingerprint(certificate);
+            String encoded = preferences.getString(key, null);
+            if (encoded == null) return false;
+            byte[] stored = Base64.decode(encoded, Base64.NO_WRAP);
+            return MessageDigest.isEqual(stored, certificate.getEncoded());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public List<X509Certificate> getTrustedCertificateAuthorities() {
+        List<X509Certificate> certificates = new ArrayList<>();
+        try {
+            java.security.cert.CertificateFactory factory =
+                    java.security.cert.CertificateFactory.getInstance("X.509");
+            for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {
+                String key = entry.getKey();
+                if (key == null || !key.startsWith(CA_PREFIX) || !(entry.getValue() instanceof String)) continue;
+                try {
+                    byte[] der = Base64.decode((String) entry.getValue(), Base64.NO_WRAP);
+                    X509Certificate certificate = (X509Certificate) factory.generateCertificate(
+                            new java.io.ByteArrayInputStream(der));
+                    String expected = key.substring(CA_PREFIX.length());
+                    if (expected.equals(fingerprint(certificate)) && certificate.getBasicConstraints() >= 0) {
+                        certificates.add(certificate);
+                    }
+                } catch (Exception ignored) { }
+            }
+        } catch (Exception ignored) { }
+        return certificates;
+    }
+
     public List<String> listFingerprints() {
         List<String> items = new ArrayList<>();
         for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {
             String key = entry.getKey();
-            if (key != null && !key.startsWith(AUDIT_PREFIX) && entry.getValue() instanceof String) {
+            if (key != null && !key.startsWith(AUDIT_PREFIX) && !key.startsWith(CA_PREFIX)
+                    && entry.getValue() instanceof String) {
                 items.add(key);
             }
         }
