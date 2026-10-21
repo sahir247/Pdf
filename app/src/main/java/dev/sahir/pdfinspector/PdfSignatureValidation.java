@@ -98,11 +98,28 @@ public final class PdfSignatureValidation {
             System.arraycopy(pdf, 0, revision, 0, revision.length);
             try (PDDocument signedDocument = PDDocument.load(new ByteArrayInputStream(revision))) {
                 List<PDSignature> signatures = signedDocument.getSignatureDictionaries();
-                boolean hasSignature = signatures != null && !signatures.isEmpty();
-                checks.add(new Check("Signed-revision parse",
-                        hasSignature ? State.PASS : State.FAIL,
-                        hasSignature ? "The bytes through the signed revision parse as a PDF containing a signature."
-                                : "The signed revision did not contain a parsed signature dictionary."));
+                boolean matchingSignature = false;
+                if (signatures != null) {
+                    for (PDSignature candidate : signatures) {
+                        int[] candidateRange = candidate.getByteRange();
+                        if (!sameByteRange(byteRange, candidateRange)) continue;
+                        try {
+                            // A different signature dictionary in the prefix is not sufficient:
+                            // match this exact ByteRange and the excluded CMS Contents bytes.
+                            if (java.util.Arrays.equals(signature.getContents(pdf), candidate.getContents(revision))) {
+                                matchingSignature = true;
+                                break;
+                            }
+                        } catch (Exception ignored) {
+                            // Treat an unreadable candidate as non-matching, never as a pass.
+                        }
+                    }
+                }
+                checks.add(new Check("Signed-revision signature identity",
+                        matchingSignature ? State.PASS : State.FAIL,
+                        matchingSignature
+                                ? "The signed-revision prefix contains this exact signature ByteRange and Contents value."
+                                : "The signed-revision prefix parsed, but this exact signature dictionary was not matched."));
             } catch (Exception e) {
                 checks.add(new Check("Signed-revision parse", State.FAIL,
                         "The PDF parser could not load the exact signed revision (" + e.getClass().getSimpleName() + ")."));
@@ -113,6 +130,12 @@ public final class PdfSignatureValidation {
         checks.add(new Check("Shadow-attack / semantic revision analysis", State.REVIEW_REQUIRED,
                 "A parser load and transform-reference inspection cannot prove that all hidden content or shadow attacks are absent."));
         return new Report(checks);
+    }
+
+    private static boolean sameByteRange(int[] left, int[] right) {
+        if (left == null || right == null || left.length != 4 || right.length != 4) return false;
+        for (int i = 0; i < 4; i++) if (left[i] != right[i]) return false;
+        return true;
     }
 
     private static void inspectTransformReferences(PDSignature signature, List<Check> checks) {
