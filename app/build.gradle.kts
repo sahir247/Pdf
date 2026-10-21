@@ -28,7 +28,8 @@ android {
                 "META-INF/NOTICE",
                 "META-INF/NOTICE.txt",
                 "META-INF/INDEX.LIST",
-                // BouncyCastle 1.85 jars all carry this same multi-release OSGi manifest.
+                "META-INF/LICENSE.md",
+                // BouncyCastle 1.85 jars all carry these same resources.
                 "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
             )
         }
@@ -40,6 +41,8 @@ dependencies {
         // pdfbox-android brings BC 1.72 transitively. Keep one BC family/version
         // on the runtime classpath; the app uses the explicitly pinned 1.85 artifacts below.
         exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
+        exclude(group = "org.bouncycastle", module = "bcpkix-jdk15to18")
+        exclude(group = "org.bouncycastle", module = "bcutil-jdk15to18")
     }
     implementation("org.bouncycastle:bcprov-jdk18on:1.85")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.85")
