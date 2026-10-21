@@ -135,7 +135,7 @@ public final class MainActivity extends Activity {
         addSpace(8);
         content.addView(manageCa);
 
-        TextView caveat = text("A green tick requires valid CMS cryptography, current certificate validity, full-file ByteRange coverage, and a certificate path to an Android system CA or a CA you explicitly imported into this app. A leaf-certificate pin alone is not a trusted issuer chain. Revocation, trusted timestamps, and complete PDF revision / DocMDP / FieldMDP analysis remain unimplemented. Saving exports the original PDF bytes unchanged.", 12, false, 0xFF6A4B12);
+        TextView caveat = text("A green tick requires valid CMS cryptography, current certificate validity, full-file ByteRange coverage, and a certificate path to an Android system CA, the bundled fingerprint-pinned CCA India 2022 document-signing root, or a CA you explicitly imported into this app. A leaf-certificate pin alone is not a trusted issuer chain. Revocation, trusted timestamps, and complete PDF revision / DocMDP / FieldMDP analysis remain unimplemented. Saving exports the original PDF bytes unchanged.", 12, false, 0xFF6A4B12);
         caveat.setPadding(dp(12), dp(12), dp(12), dp(12));
         caveat.setBackground(roundBg(0xFFFFF4D6, 0xFFFFE0A3));
         addSpace(16);
@@ -160,7 +160,7 @@ public final class MainActivity extends Activity {
         List<X509Certificate> certificates = trustStore.getTrustedCertificateAuthorities();
         if (certificates.isEmpty()) {
             new AlertDialog.Builder(this).setTitle("Trusted CA anchors")
-                    .setMessage("No app-specific CA trust anchors have been imported.")
+                    .setMessage("No user-imported CA anchors. The bundled CCA India 2022 document-signing root is built into the app and cannot be removed here.")
                     .setPositiveButton("Close", null).show();
             return;
         }
@@ -413,9 +413,17 @@ public final class MainActivity extends Activity {
 
                         if (signerRecord.certificate != null) {
                             signerRecord.fingerprint = TrustedCertificateStore.fingerprint(signerRecord.certificate);
+                            List<X509Certificate> appTrustAnchors = new ArrayList<>();
+                            // Built-in roots are read-only and fingerprint-pinned. Fail closed if the
+                            // packaged root cannot be loaded; user-imported anchors remain separate.
+                            try {
+                                appTrustAnchors.addAll(BundledTrustAnchors.load(this));
+                            } catch (Exception bundledRootError) {
+                                // No bundled trust is added if the asset fails integrity/validity checks.
+                            }
+                            appTrustAnchors.addAll(trustStore.getTrustedCertificateAuthorities());
                             signerRecord.pathResult = CertificatePathValidator.validate(
-                                    signerRecord.certificate, embeddedCertificates,
-                                    trustStore.getTrustedCertificateAuthorities());
+                                    signerRecord.certificate, embeddedCertificates, appTrustAnchors);
                         } else {
                             signerRecord.pathResult = new CertificatePathValidator.Result(
                                     CertificatePathValidator.Status.UNKNOWN,
