@@ -277,8 +277,7 @@ public final class PdfStamperEngine {
 
         if (parentWidth > 0 && parentWidth <= 65f) {
             // Compact stamps (e.g. Aadhaar 50x30 pt):
-            // Checkmark is calibrated to rest over 'Signature' and '2026.10.21'
-            // Right tip terminates at 'u'/'r'/'e' of 'Signature' before 'valid', matching Adobe Acrobat DC
+            // Checkmark apex sits directly over the '2' of '2026', and right tip terminates in 'tu' of 'Signature'
             form.setBBox(new PDRectangle(-60, -20, 100, 100));
 
             StringBuilder sb = new StringBuilder();
@@ -286,13 +285,13 @@ public final class PdfStamperEngine {
             sb.append("1 J 1 j 4 M [] 0 d\n");
             // Layer 1: Subtle shadow
             sb.append("0 G\n");
-            sb.append("-6.31 15.47 m -26.68 41.39 l -19.90 50.80 l -6.90 29.80 l 18.51 74.73 l 27.60 67.80 l h f\n");
+            sb.append("-0.31 15.47 m -20.68 41.39 l -13.90 50.80 l -0.90 29.80 l 24.51 74.73 l 33.60 67.80 l h f\n");
             // Layer 2: Vibrant Adobe Green fill
             sb.append("0 0.7 0.23 rg\n");
-            sb.append("-7.41 16.67 m -27.78 42.59 l -21.00 52.00 l -8.00 31.00 l 17.41 75.93 l 26.50 69.00 l h f\n");
-            // Layer 3: Crisp black outline
+            sb.append("-1.41 16.67 m -21.78 42.59 l -15.00 52.00 l -2.00 31.00 l 23.41 75.93 l 32.50 69.00 l h f\n");
+            // Layer 3: Crisp black outline (0.85w)
             sb.append("0 G 0.85 w\n");
-            sb.append("-7.41 16.67 m -27.78 42.59 l -21.00 52.00 l -8.00 31.00 l 17.41 75.93 l 26.50 69.00 l h S\n");
+            sb.append("-1.41 16.67 m -21.78 42.59 l -15.00 52.00 l -2.00 31.00 l 23.41 75.93 l 32.50 69.00 l h S\n");
             sb.append("Q\n");
 
             try (OutputStream out = form.getCOSObject().createOutputStream()) {
@@ -301,6 +300,9 @@ public final class PdfStamperEngine {
             return form;
         }
 
+        // Standard / Banner stamps (e.g. Income Certificate 120x60 pt):
+        // Apex sits high at Y=30.52 (never touching 'Location: E-Dist 2.0')
+        // Right tip terminates cleanly inside 'a' of 'valid'
         form.setBBox(new PDRectangle(0, 0, width, height));
 
         float scale = Math.min(width / 100f, height / 100f);
@@ -310,15 +312,15 @@ public final class PdfStamperEngine {
         sb.append("q\n");
         sb.append(String.format(Locale.US, "%.4f 0 0 %.4f 0 0 cm\n", scale, scale));
         sb.append("1 J 1 j 4 M [] 0 d\n");
-        // Layer 1: Black 3D drop shadow (extruded to bottom-right)
+        // Layer 1: Black 3D drop shadow
         sb.append("0 G\n");
-        sb.append("31.1 0 m 4.2 26.6 l 12.0 37.0 l 30.2 15.3 l 62.3 69.9 l 73.5 61.7 l h f\n");
-        // Layer 2: Vibrant Adobe Green fill (0, 0.7, 0.23 rg)
+        sb.append("28.24 28.72 m 3.96 51.39 l 11.46 60.89 l 25.34 43.22 l 56.81 89.68 l 67.31 81.68 l h f\n");
+        // Layer 2: Vibrant Adobe Green fill
         sb.append("0 0.7 0.23 rg\n");
-        sb.append("28.8 3.8 m 1.9 30.4 l 9.8 40.9 l 28.0 19.2 l 60.0 73.8 l 71.3 65.5 l h f\n");
-        // Layer 3: Crisp black outer outline border stroke (0.9 w)
-        sb.append("0 G 0.9 w\n");
-        sb.append("28.8 3.8 m 1.9 30.4 l 9.8 40.9 l 28.0 19.2 l 60.0 73.8 l 71.3 65.5 l h S\n");
+        sb.append("26.74 30.52 m 2.46 53.19 l 9.96 62.69 l 26.04 45.02 l 55.31 91.48 l 65.81 83.48 l h f\n");
+        // Layer 3: Crisp black outer outline border stroke (1.2 w)
+        sb.append("0 G 1.2 w\n");
+        sb.append("26.74 30.52 m 2.46 53.19 l 9.96 62.69 l 26.04 45.02 l 55.31 91.48 l 65.81 83.48 l h S\n");
         sb.append("Q\n");
 
         try (OutputStream out = form.getCOSObject().createOutputStream()) {

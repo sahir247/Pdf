@@ -286,18 +286,18 @@ public final class DynamicSignatureOverlay {
         // 3. Draw Adobe green checkmark vector using exact stream matrix or dynamic typography
         float checkCx, checkCy, checkSize;
         if (widgetW <= 65f) {
-            // Compact stamp (e.g. Aadhaar 50x30 pt): Checkmark is calibrated to rest over 'Signature' and '2026.10.21'
-            // Matching Adobe Acrobat DC exact typography anchor
-            float cxPdf = 10.1f;
+            // Compact stamp (e.g. Aadhaar 50x30 pt): Checkmark apex touches '2' of '2026'
+            float cxPdf = 11.7f;
             float cyPdf = 14.0f;
             float sizePdf = 18.0f;
             checkCx = bounds.left + cxPdf * scaleX;
             checkCy = bounds.bottom - cyPdf * scaleY;
             checkSize = sizePdf * scaleY;
         } else if (layout.n1Scale > 0) {
-            float sizePdf = 100.0f * layout.n1Scale;
-            float cxPdf = layout.n1Tx + BBOX_CENTER_X * layout.n1Scale;
-            float cyPdf = layout.n1Ty + (100.0f - BBOX_CENTER_Y) * layout.n1Scale;
+            // Standard banner stamp (e.g. Income Certificate): Apex at Y=30.52 (above Reason/Location)
+            float cxPdf = layout.n1Tx + 41.0f * layout.n1Scale;
+            float cyPdf = layout.n1Ty + 61.0f * layout.n1Scale;
+            float sizePdf = 95.0f * layout.n1Scale;
             checkCx = bounds.left + cxPdf * scaleX;
             checkCy = bounds.bottom - cyPdf * scaleY;
             checkSize = sizePdf * scaleY;
