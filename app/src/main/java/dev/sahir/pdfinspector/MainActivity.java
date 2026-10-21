@@ -372,18 +372,6 @@ public final class MainActivity extends Activity {
     }
 
     private String certificateDateStatus(X509Certificate certificate) {
-        if (certificate == null) return "UNKNOWN";
-        try {
-            certificate.checkValidity(new Date());
-            return "Valid at current device time";
-        } catch (java.security.cert.CertificateExpiredException e) {
-            return "EXPIRED now (historical validity not established)";
-        } catch (java.security.cert.CertificateNotYetValidException e) {
-            return "NOT YET VALID at current device time";
-        }
-    }
-
-    private String certificateDateStatus(X509Certificate certificate) {
         if (certificate == null) return "UNKNOWN (certificate unavailable)";
         try {
             certificate.checkValidity(new Date());
