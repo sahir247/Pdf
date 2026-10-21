@@ -606,11 +606,6 @@ public final class MainActivity extends Activity {
                         .append("certificate valid at the current device time; ByteRange covers the current file.\n");
                 report.append("LIMITATION: revocation, trusted timestamp, hidden-content/shadow-attack and complete PDF revision / DocMDP / FieldMDP ")
                         .append("checks are not implemented. This green tick is limited to the checks listed above.\n");
-                Button save = button("Save unchanged PDF copy");
-                save.setContentDescription("Save the original PDF bytes unchanged; this is not a claim of comprehensive PDF validation");
-                save.setOnClickListener(v -> saveVerifiedPdfCopy());
-                addSpaceIn(actions, 12);
-                actions.addView(save);
                 status.setTextColor(0xFF263746);
                 status.setBackground(roundBg(0xFFFFFFFF, 0xFFD9E0E7));
             } else {
