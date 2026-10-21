@@ -301,34 +301,34 @@ public final class MainActivity extends AppCompatActivity {
         actionsCard.addView(secTitle);
         addSpaceIn(actionsCard, 12);
 
-        // Action 1: Fix Visual Appearance (Green Tick)
-        Button fixBtn = styledButton("✓ Fix Signature (Green Tick)", 0xFF2E7D32, 0xFFFFFFFF);
+        // Action 1: Save Original Signed PDF (Primary Integrity Choice)
+        Button saveOrigBtn = styledButton("💾 Save Original Signed PDF (Preserve Integrity)", 0xFF2E7D32, 0xFFFFFFFF);
+        saveOrigBtn.setOnClickListener(v -> saveOriginalPdfCopy());
+        actionsCard.addView(saveOrigBtn);
+
+        TextView saveOrigDesc = text("Preserves 100% byte-for-byte original signed document, intact digital signatures, and legal non-repudiation.", 12, false, 0xFF546E7A);
+        saveOrigDesc.setPadding(dp(4), dp(4), dp(4), 0);
+        actionsCard.addView(saveOrigDesc);
+        addSpaceIn(actionsCard, 14);
+
+        // Action 2: Fix Visual Appearance (Rendered Copy for Paper Printing)
+        Button fixBtn = styledButton("✓ Fix Visual Signature (Print Replica)", 0xFF1565C0, 0xFFFFFFFF);
         fixBtn.setOnClickListener(v -> fixSignatureAppearance());
         actionsCard.addView(fixBtn);
 
-        TextView fixDesc = text("Replaces unverified status and question mark with official Adobe green checkmark (Signature valid).", 12, false, 0xFF546E7A);
+        TextView fixDesc = text("Gated by cryptographic validation. Stamps Adobe green checkmark for paper printing and basic viewers. (Alters bytes).", 12, false, 0xFF546E7A);
         fixDesc.setPadding(dp(4), dp(4), dp(4), 0);
         actionsCard.addView(fixDesc);
         addSpaceIn(actionsCard, 14);
 
-        // Action 2: Export Flattened Printable PDF
-        Button flattenBtn = styledButton("🖨️ Export Flattened / Printable PDF", 0xFF0277BD, 0xFFFFFFFF);
+        // Action 3: Export Flattened Printable PDF
+        Button flattenBtn = styledButton("🖨️ Export Flattened PDF (Legacy Printers)", 0xFF0277BD, 0xFFFFFFFF);
         flattenBtn.setOnClickListener(v -> exportFlattenedPrintablePdf());
         actionsCard.addView(flattenBtn);
 
-        TextView flattenDesc = text("Permanently burns verified green checkmark onto document pages. Compatible with all printers and mobile viewers.", 12, false, 0xFF546E7A);
+        TextView flattenDesc = text("Gated by cryptographic validation. Permanently burns checkmark and strips AcroForm for physical printers.", 12, false, 0xFF546E7A);
         flattenDesc.setPadding(dp(4), dp(4), dp(4), 0);
         actionsCard.addView(flattenDesc);
-        addSpaceIn(actionsCard, 14);
-
-        // Action 3: Save Original Signed PDF
-        Button saveOrigBtn = styledButton("💾 Save Original Signed PDF", 0xFF455A64, 0xFFFFFFFF);
-        saveOrigBtn.setOnClickListener(v -> saveOriginalPdfCopy());
-        actionsCard.addView(saveOrigBtn);
-
-        TextView saveOrigDesc = text("Preserves original byte-for-byte document bytes and existing embedded digital signatures.", 12, false, 0xFF546E7A);
-        saveOrigDesc.setPadding(dp(4), dp(4), dp(4), 0);
-        actionsCard.addView(saveOrigDesc);
         addSpaceIn(actionsCard, 14);
 
         // Action 4: Share Document
@@ -635,11 +635,13 @@ public final class MainActivity extends AppCompatActivity {
                                 signerRecord.fingerprint = TrustedCertificateStore.fingerprint(signerRecord.certificate);
                                 List<X509Certificate> appTrustAnchors = new ArrayList<>();
                                 try {
-                                    appTrustAnchors.addAll(BundledTrustAnchors.load(this));
+                                    appTrustAnchors.addAll(BundledTrustAnchors.loadTrustAnchors(this));
                                 } catch (Exception ignored) { }
                                 appTrustAnchors.addAll(trustStore.getTrustedCertificateAuthorities());
+
+                                List<X509Certificate> intermediates = BundledTrustAnchors.loadBundledIntermediates(this);
                                 signerRecord.pathResult = CertificatePathValidator.validate(
-                                        signerRecord.certificate, embeddedCertificates, appTrustAnchors);
+                                        signerRecord.certificate, embeddedCertificates, appTrustAnchors, intermediates);
                             } else {
                                 signerRecord.pathResult = new CertificatePathValidator.Result(
                                         CertificatePathValidator.Status.UNKNOWN,
@@ -660,6 +662,28 @@ public final class MainActivity extends AppCompatActivity {
         renderDocumentView();
     }
 
+    /**
+     * Strictly verifies that all digital signatures in the document are mathematically
+     * valid, have intact ByteRanges without tampering, and chain to a trusted CA.
+     * Prevents generating visual 'verified' stamps on invalid or untrusted signatures.
+     */
+    private boolean isDocumentCryptographicallyValid() {
+        if (records.isEmpty()) return false;
+        for (SignatureRecord rec : records) {
+            if (!rec.byteRangePlausible || rec.parseError != null) return false;
+            if (rec.signers.isEmpty()) return false;
+            for (SignerRecord signer : rec.signers) {
+                if (!signer.cryptoValid) return false;
+                boolean trusted = signer.pathResult != null &&
+                        (signer.pathResult.status == CertificatePathValidator.Status.TRUSTED_SYSTEM_PATH
+                                || signer.pathResult.status == CertificatePathValidator.Status.TRUSTED_APP_PATH
+                                || (signer.certificate != null && trustStore.isTrusted(signer.certificate)));
+                if (!trusted) return false;
+            }
+        }
+        return true;
+    }
+
     private void fixSignatureAppearance() {
         if (currentPdf == null) {
             toast("Please select a PDF first.");
@@ -669,16 +693,24 @@ public final class MainActivity extends AppCompatActivity {
             toast("No digital signatures found in this document to fix.");
             return;
         }
+        if (!isDocumentCryptographicallyValid()) {
+            showStatusDialog("Visual Rectification Blocked",
+                    "Cryptographic validation failed or certificate is untrusted.\n\n" +
+                    "A visual 'Signature valid' green checkmark can ONLY be generated for documents whose digital signatures have been mathematically verified against trusted certificate authorities.\n\n" +
+                    "Please ensure the certificate chains to a trusted root authority (e.g. CCA India / nCode / System CA) or explicitly trust the signer before rectifying.");
+            return;
+        }
         try {
             PdfStamperEngine.StampResult result = PdfStamperEngine.processPdf(currentPdf, currentPdfPassword);
             byte[] fixedPdf = result.rectifiedPdf;
             String baseName = getBaseName();
-            String outputName = baseName + "-verified.pdf";
-            showExportOptionsDialog("Visual Signature Rectified",
-                    "The signature appearance has been updated with the Adobe-standard green checkmark and 'Signature valid' status.",
+            String outputName = baseName + "-visual-print-copy.pdf";
+            showExportOptionsDialog("Rendered Visual Print Copy Ready",
+                    "The signature appearance has been updated with the Adobe-standard green checkmark and 'Signature valid' status for paper printing and basic viewers.\n\n" +
+                    "⚠️ INTEGRITY NOTICE: Modifying visual appearance streams alters PDF bytes and invalidates digital signature cryptographic hashes. This file is intended as a visual print replica. To maintain digital legal non-repudiation, retain your Original Signed PDF.",
                     fixedPdf, outputName);
         } catch (Exception e) {
-            toast("Failed to fix signature: " + safeMessage(e));
+            toast("Failed to fix signature appearance: " + safeMessage(e));
         }
     }
 
@@ -691,13 +723,21 @@ public final class MainActivity extends AppCompatActivity {
             toast("No digital signatures found in this document to export.");
             return;
         }
+        if (!isDocumentCryptographicallyValid()) {
+            showStatusDialog("Flattened Export Blocked",
+                    "Cryptographic validation failed or certificate is untrusted.\n\n" +
+                    "A flattened printable PDF can only be generated for documents whose digital signatures have been mathematically verified.\n\n" +
+                    "Please ensure the certificate chains to a trusted root authority or trust the signer first.");
+            return;
+        }
         try {
             PdfStamperEngine.StampResult result = PdfStamperEngine.processPdf(currentPdf, currentPdfPassword);
             byte[] flattenedPdf = result.printablePdf;
             String baseName = getBaseName();
-            String outputName = baseName + "-printable.pdf";
+            String outputName = baseName + "-flattened-print.pdf";
             showExportOptionsDialog("Flattened Printable PDF Ready",
-                    "The green checkmark is now permanently burned onto the page content, and AcroForm annotations were stripped so all printers and mobile viewers display it correctly.",
+                    "The green checkmark is now permanently burned onto the page content, and AcroForm annotations were stripped so all printers and mobile viewers display it correctly.\n\n" +
+                    "⚠️ INTEGRITY NOTICE: Destructive export for printing only. Signature widgets and AcroForm dictionaries have been removed.",
                     flattenedPdf, outputName);
         } catch (Exception e) {
             toast("Failed to export printable PDF: " + safeMessage(e));
@@ -825,13 +865,14 @@ public final class MainActivity extends AppCompatActivity {
             toast("No embedded signature detected.");
             return;
         }
-        pendingSaveBytes = currentPdf.clone();
-        pendingSaveName = getBaseName() + "-signed.pdf";
-        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("application/pdf");
-        intent.putExtra(Intent.EXTRA_TITLE, pendingSaveName);
-        startActivityForResult(intent, SAVE_PDF_COPY);
+        String baseName = getBaseName();
+        String outputName = baseName + "-original-signed.pdf";
+        showExportOptionsDialog("Original Signed PDF (Cryptographically Intact)",
+                "This exports the exact, un-modified original signed PDF bytes.\n\n" +
+                "✓ 100% byte-for-byte integrity preserved.\n" +
+                "✓ Retains valid ByteRange and CMS digital signatures for Adobe Acrobat and government portals.\n" +
+                "✓ Full legal non-repudiation.",
+                currentPdf.clone(), outputName);
     }
 
     private void showPasswordDialog(boolean previousAttemptFailed) {

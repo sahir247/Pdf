@@ -12,6 +12,7 @@ import java.security.cert.X509CertSelector;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.Set;
@@ -21,7 +22,8 @@ import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
 
 /**
- * Checks whether a signer certificate currently chains to the Android system CA store.
+ * Checks whether a signer certificate currently chains to the Android system CA store
+ * or bundled/user-imported CA trust anchors (including CCA India and nCode Solutions PKI).
  *
  * Exact user pins are intentionally not added as CA trust anchors here. A signer pin is a
  * separate, leaf-certificate-only trust decision and must never make a sibling certificate
@@ -50,12 +52,19 @@ public final class CertificatePathValidator {
 
     public static Result validate(X509Certificate signer,
                                   Collection<X509Certificate> embeddedCertificates) {
-        return validate(signer, embeddedCertificates, java.util.Collections.emptyList());
+        return validate(signer, embeddedCertificates, Collections.emptyList(), Collections.emptyList());
     }
 
     public static Result validate(X509Certificate signer,
                                   Collection<X509Certificate> embeddedCertificates,
                                   Collection<X509Certificate> appTrustAnchors) {
+        return validate(signer, embeddedCertificates, appTrustAnchors, Collections.emptyList());
+    }
+
+    public static Result validate(X509Certificate signer,
+                                  Collection<X509Certificate> embeddedCertificates,
+                                  Collection<X509Certificate> appTrustAnchors,
+                                  Collection<X509Certificate> intermediateCertificates) {
         if (signer == null) {
             return new Result(Status.UNKNOWN, "Signer certificate is unavailable.");
         }
@@ -86,6 +95,7 @@ public final class CertificatePathValidator {
             candidates.add(signer);
             if (embeddedCertificates != null) candidates.addAll(embeddedCertificates);
             if (appTrustAnchors != null) candidates.addAll(appTrustAnchors);
+            if (intermediateCertificates != null) candidates.addAll(intermediateCertificates);
             parameters.addCertStore(CertStore.getInstance(
                     "Collection", new CollectionCertStoreParameters(candidates)));
 
@@ -98,14 +108,16 @@ public final class CertificatePathValidator {
             for (X509Certificate appAnchor : appAnchors) {
                 if (sameCertificate(anchor, appAnchor)) {
                     return new Result(Status.TRUSTED_APP_PATH,
-                            "Certificate path reaches a bundled or user-imported CA trust anchor in this app.");
+                            "Certificate path reaches a bundled or user-imported CA trust anchor in this app (" +
+                                    anchor.getSubjectX500Principal().getName() + ").");
                 }
             }
             return new Result(Status.TRUSTED_SYSTEM_PATH,
-                    "Certificate path reaches an Android system trust anchor at the current device time.");
+                    "Certificate path reaches an Android system trust anchor at the current device time (" +
+                            anchor.getSubjectX500Principal().getName() + ").");
         } catch (CertPathBuilderException e) {
             return new Result(Status.UNTRUSTED,
-                    "No valid path to an Android system, bundled, or user-imported CA trust anchor was found at the current device time.");
+                    "No valid path to an Android system, bundled, or user-imported CA trust anchor was found at current device time.");
         } catch (Exception e) {
             return new Result(Status.UNKNOWN,
                     "Certificate path validation could not be completed (" +

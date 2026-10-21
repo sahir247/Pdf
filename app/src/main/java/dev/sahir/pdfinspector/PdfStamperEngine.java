@@ -36,9 +36,23 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * Native PDF Box engine for signature appearance rectification and flattening.
- * Replaces unverified Adobe question-mark appearances with the official Adobe green checkmark
- * (bold black stroke, drop shadow, Adobe green fill) and produces universal print-ready documents.
+ * Native PDFBox engine for signature appearance rectification and flattening.
+ *
+ * ⚠️ CRYPTOGRAPHIC INTEGRITY & SERIALIZATION ARCHITECTURE NOTE:
+ * When PDFBox loads a document and calls {@code document.save(out)}, it serializes
+ * a newly constructed PDF byte stream with rebuilt cross-reference tables, object IDs,
+ * and stream lengths. Consequently, the original cryptographic ByteRange and CMS
+ * digital signature hashes of the signed document are broken on the reserialized copy.
+ *
+ * In accordance with ISO 32000-1 and Adobe Acrobat security architecture:
+ * - Adobe Acrobat DC NEVER modifies the PDF byte stream on disk when displaying a green checkmark.
+ *   Acrobat verifies CMS signatures dynamically in-memory and renders a dynamic UI overlay.
+ * - This engine is designed specifically to produce RENDERED VISUAL REPLICAS
+ *   ('-visual-print-copy.pdf' and '-flattened-print.pdf') for physical paper printing and
+ *   legacy/mobile viewers that lack digital signature PKI verification engines.
+ * - To maintain digital signature integrity and legal non-repudiation, callers must ALWAYS
+ *   preserve and export the byte-for-byte un-modified original document bytes.
+ * - Visual rectification must be strictly gated by prior cryptographic validation.
  */
 public final class PdfStamperEngine {
 
