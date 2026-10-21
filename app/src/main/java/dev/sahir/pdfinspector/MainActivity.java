@@ -483,12 +483,12 @@ public final class MainActivity extends Activity {
 
             boolean greenTick = isEligibleForGreenTick();
             if (greenTick) {
-                report.append("\n✓ SIGNATURE CHECKS PASSED — CMS signature mathematics verified; exact signer certificate trusted locally; ")
+                report.append("\n✓ SIGNATURE CHECKS PASSED — CMS signature mathematics verified; certificate chains to a trusted local root; ")
                         .append("certificate valid at the current device time; ByteRange covers the current file.\n");
                 report.append("LIMITATION: revocation, trusted timestamp, hidden-content/shadow-attack and complete PDF revision / DocMDP / FieldMDP ")
                         .append("checks are not implemented. This green tick is limited to the checks listed above.\n");
-                Button save = button("Save verified PDF copy");
-                save.setContentDescription("Save an unchanged copy of the PDF after the displayed signature checks passed");
+                Button save = button("Save unchanged PDF copy");
+                save.setContentDescription("Save the original PDF bytes unchanged; this is not a claim of comprehensive PDF validation");
                 save.setOnClickListener(v -> saveVerifiedPdfCopy());
                 addSpaceIn(actions, 12);
                 actions.addView(save);
@@ -496,7 +496,7 @@ public final class MainActivity extends Activity {
                 status.setBackground(roundBg(0xFFFFFFFF, 0xFFD9E0E7));
             } else {
                 report.append("\nOVERALL RESULT: REVIEW REQUIRED.\n");
-                report.append("A green tick requires valid CMS signature mathematics, an exact locally trusted signer certificate, ")
+                report.append("A green tick requires valid CMS signature mathematics and a certificate path to a trusted local root, ")
                         .append("current certificate validity, structurally plausible ByteRange and coverage of the current file for every signature/signer.\n");
                 report.append("Revocation is unknown, trusted timestamps are not validated, and complete PDF revision / DocMDP / FieldMDP ")
                         .append("analysis is not implemented. Exact pins do not override expiry, revocation, invalid cryptography, or document changes.");
