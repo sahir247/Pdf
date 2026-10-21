@@ -45,7 +45,10 @@ import java.util.List;
 
 public final class MainActivity extends Activity {
     private static final int PICK_PDF = 1001;
+    private static final int SAVE_PDF_COPY = 1002;
     private static final long MAX_PDF_BYTES = 50L * 1024L * 1024L;
+    private byte[] pendingSaveBytes;
+    private String pendingSaveName = "verified-copy.pdf";
 
     private LinearLayout content;
     private LinearLayout actions;
@@ -120,7 +123,7 @@ public final class MainActivity extends Activity {
         addSpace(12);
         content.addView(manage);
 
-        TextView caveat = text("Security scope: exact signer-certificate pins are stored only in this app. The inspector reports CMS signature mathematics, structural ByteRange checks and an Android system PKIX path separately. CRL/OCSP revocation, trusted timestamps, complete incremental-revision analysis and DocMDP/FieldMDP permissions are not implemented. This build always requires review and never claims a full green-check validation.", 12, false, 0xFF6A4B12);
+        TextView caveat = text("A green tick means the CMS signature mathematics verified, the exact signer certificate is trusted locally in this app, the certificate is valid at the current device time, and the signature ByteRange covers the current file. It is not a guarantee of issuer status: revocation, trusted timestamps, complete revision analysis and DocMDP/FieldMDP permissions are not implemented. Saving exports the original PDF bytes without changing its signature.", 12, false, 0xFF6A4B12);
         caveat.setPadding(dp(12), dp(12), dp(12), dp(12));
         caveat.setBackground(roundBg(0xFFFFF4D6, 0xFFFFE0A3));
         addSpace(16);
@@ -136,6 +139,27 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == SAVE_PDF_COPY) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+                pendingSaveBytes = null;
+                return;
+            }
+            if (pendingSaveBytes == null) {
+                toast("The PDF copy is no longer available. Inspect the document again.");
+                return;
+            }
+            try (java.io.OutputStream out = getContentResolver().openOutputStream(data.getData(), "wt")) {
+                if (out == null) throw new IllegalStateException("Unable to create the destination PDF.");
+                out.write(pendingSaveBytes);
+                out.flush();
+                toast("Original PDF copy saved. Its embedded signature bytes were not modified.");
+            } catch (Exception e) {
+                toast("Could not save PDF copy: " + safeMessage(e));
+            } finally {
+                pendingSaveBytes = null;
+            }
+            return;
+        }
         if (requestCode != PICK_PDF || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         try (InputStream in = getContentResolver().openInputStream(uri)) {
@@ -146,10 +170,11 @@ public final class MainActivity extends Activity {
             inspectPdf();
         } catch (Exception e) {
             currentPdf = null;
+            currentPdfPassword = "";
             records.clear();
             actions.removeAllViews();
-            showStatus("Could not inspect PDF\n" + safeMessage(e) +
-                    "\n\nThe file may be encrypted, malformed, too large, or unsupported.");
+            showStatus("Could not inspect PDF\\n" + safeMessage(e) +
+                    "\\n\\nThe file may be malformed, too large, or unsupported.");
         }
     }
 
@@ -344,11 +369,66 @@ public final class MainActivity extends Activity {
                 records.add(record);
             }
 
-            report.append("\nOVERALL RESULT: REVIEW REQUIRED — this build does not issue a full green-check validation.\n");
-            report.append("Revocation is unknown, trusted timestamps are not validated, and complete PDF revision / DocMDP / FieldMDP ")
-                    .append("analysis is not implemented. Exact pins do not override expiry, revocation, invalid cryptography, or document changes.");
+            boolean greenTick = isEligibleForGreenTick();
+            if (greenTick) {
+                report.append("\n✓ SIGNATURE CHECKS PASSED — CMS signature mathematics verified; exact signer certificate trusted locally; ")
+                        .append("certificate valid at the current device time; ByteRange covers the current file.\n");
+                report.append("LIMITATION: revocation, trusted timestamp, hidden-content/shadow-attack and complete PDF revision / DocMDP / FieldMDP ")
+                        .append("checks are not implemented. This green tick is limited to the checks listed above.\n");
+                Button save = button("Save verified PDF copy");
+                save.setContentDescription("Save an unchanged copy of the PDF after the displayed signature checks passed");
+                save.setOnClickListener(v -> saveVerifiedPdfCopy());
+                addSpaceIn(actions, 12);
+                actions.addView(save);
+                status.setTextColor(0xFF176B37);
+                status.setBackground(roundBg(0xFFE9F8EF, 0xFF76C893));
+            } else {
+                report.append("\nOVERALL RESULT: REVIEW REQUIRED.\n");
+                report.append("A green tick requires valid CMS signature mathematics, an exact locally trusted signer certificate, ")
+                        .append("current certificate validity, structurally plausible ByteRange and coverage of the current file for every signature/signer.\n");
+                report.append("Revocation is unknown, trusted timestamps are not validated, and complete PDF revision / DocMDP / FieldMDP ")
+                        .append("analysis is not implemented. Exact pins do not override expiry, revocation, invalid cryptography, or document changes.");
+                status.setTextColor(0xFF263746);
+                status.setBackground(roundBg(0xFFFFFFFF, 0xFFD9E0E7));
+            }
             showStatus(report.toString());
         }
+    }
+
+    private boolean isEligibleForGreenTick() {
+        if (currentPdf == null || records.isEmpty()) return false;
+        for (SignatureRecord record : records) {
+            if (!record.byteRangePlausible || !record.coversCurrentFile || record.parseError != null
+                    || record.signers.isEmpty()) return false;
+            for (SignerRecord signer : record.signers) {
+                if (!signer.cryptoValid || signer.certificate == null || signer.fingerprint == null
+                        || !trustStore.isTrusted(signer.certificate)) return false;
+                try {
+                    signer.certificate.checkValidity(new Date());
+                } catch (Exception invalidDate) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private void saveVerifiedPdfCopy() {
+        if (!isEligibleForGreenTick()) {
+            toast("Save is available only while the displayed signature checks still pass.");
+            return;
+        }
+        pendingSaveBytes = currentPdf.clone();
+        String baseName = currentPdfName == null ? "document.pdf" : currentPdfName.trim();
+        if (baseName.isEmpty()) baseName = "document.pdf";
+        if (!baseName.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf")) baseName += ".pdf";
+        int extension = baseName.length() - 4;
+        pendingSaveName = baseName.substring(0, extension) + "-verified-copy.pdf";
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/pdf");
+        intent.putExtra(Intent.EXTRA_TITLE, pendingSaveName);
+        startActivityForResult(intent, SAVE_PDF_COPY);
     }
 
     private void showPasswordDialog(boolean previousAttemptFailed) {
