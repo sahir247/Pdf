@@ -245,15 +245,15 @@ public final class PdfStamperEngine {
 
         // SVG Path: M 12 122 L 30 102 L 80 158 L 170 12 L 194 30 L 78 192 Z (box: 182x180)
         // Scaled to fill 88% of width and height
-        float scale = Math.min(width * 0.88f / 182f, height * 0.88f / 180f);
+        float scale = Math.min(width * 0.85f / 100f, height * 0.85f / 100f);
         if (scale <= 0) scale = 0.4f;
 
         float cx = width / 2.0f;
         float cy = height / 2.0f;
 
-        float strokeWidth = Math.max(1.8f, 18f * scale);
-        float shadowOffsetX = 4f * scale;
-        float shadowOffsetY = 8f * scale;
+        float strokeWidth = Math.max(1.0f, 1.6f * scale);
+        float shadowOffsetX = 2.5f * scale;
+        float shadowOffsetY = 3.8f * scale;
 
         StringBuilder sb = new StringBuilder();
 
@@ -291,30 +291,24 @@ public final class PdfStamperEngine {
     }
 
     private static void appendCheckmarkPath(StringBuilder sb, float cx, float cy, float scale) {
-        float p1x = cx + (12f - 103f) * scale;
-        float p1y = cy - (122f - 102f) * scale;
+        float[][] pts = {
+                {0f, 62f},
+                {8f, 51f},
+                {38f, 77f},
+                {86f, 0f},
+                {100f, 11f},
+                {36f, 100f}
+        };
 
-        float p2x = cx + (30f - 103f) * scale;
-        float p2y = cy - (102f - 102f) * scale;
-
-        float p3x = cx + (80f - 103f) * scale;
-        float p3y = cy - (158f - 102f) * scale;
-
-        float p4x = cx + (170f - 103f) * scale;
-        float p4y = cy - (12f - 102f) * scale;
-
-        float p5x = cx + (194f - 103f) * scale;
-        float p5y = cy - (30f - 102f) * scale;
-
-        float p6x = cx + (78f - 103f) * scale;
-        float p6y = cy - (192f - 102f) * scale;
-
-        sb.append(String.format(Locale.US, "%.2f %.2f m\n", p1x, p1y));
-        sb.append(String.format(Locale.US, "%.2f %.2f l\n", p2x, p2y));
-        sb.append(String.format(Locale.US, "%.2f %.2f l\n", p3x, p3y));
-        sb.append(String.format(Locale.US, "%.2f %.2f l\n", p4x, p4y));
-        sb.append(String.format(Locale.US, "%.2f %.2f l\n", p5x, p5y));
-        sb.append(String.format(Locale.US, "%.2f %.2f l\n", p6x, p6y));
+        for (int i = 0; i < pts.length; i++) {
+            float x = cx + (pts[i][0] - 50f) * scale;
+            float y = cy - (pts[i][1] - 50f) * scale;
+            if (i == 0) {
+                sb.append(String.format(Locale.US, "%.2f %.2f m\n", x, y));
+            } else {
+                sb.append(String.format(Locale.US, "%.2f %.2f l\n", x, y));
+            }
+        }
         sb.append("h\n"); // close path
     }
 

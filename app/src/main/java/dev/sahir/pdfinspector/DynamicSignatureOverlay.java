@@ -7,38 +7,48 @@ import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 
+import com.tom_roush.pdfbox.cos.COSName;
+import com.tom_roush.pdfbox.pdmodel.PDResources;
+import com.tom_roush.pdfbox.pdmodel.graphics.PDXObject;
+import com.tom_roush.pdfbox.pdmodel.graphics.form.PDFormXObject;
+import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
+import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
+import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceEntry;
+import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
+
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 /**
- * High-precision vector rendering engine for Adobe Acrobat DC signature appearances.
+ * Universal high-precision vector rendering engine for Adobe Acrobat DC signature appearances.
  *
- * In accordance with ISO 32000-1, ETSI EN 319 142 (PAdES), and Adobe DigSig architecture:
- * - Adobe Acrobat NEVER modifies the signed PDF byte stream on disk to show a green checkmark.
- * - Digital signatures lock the /ByteRange of the document; altering file bytes breaks SHA-256 integrity.
- * - When Acrobat validates a signature in-memory against trusted roots (AATL/CCA India), it
- *   suppresses the unverified question-mark XObject (/n1) and renders this dynamic green
- *   checkmark overlay directly into the display framebuffer and printer spooler canvas.
- * - This engine renders the verified checkmark with Adobe-standard geometry: bold black stroke,
- *   3D drop shadow, and vibrant Adobe Green fill (#00B43C).
+ * In strict parity with Adobe Acrobat DC:
+ * - NO artificial gray/blue card border or rounded rectangle.
+ * - Fills background with clean white to seamlessly mask underlying unverified '?' and '(Signature Not Verified)'
+ *   without altering or outlining the document canvas.
+ * - Renders 'Signature valid' in black bold text (matching Adobe Acrobat /n4 replacement).
+ * - Renders the Adobe Green checkmark (#00A128) with black drop shadow and outline,
+ *   centered gracefully behind the text lines.
+ * - Renders multi-line signer details in black regular text directly on top of the checkmark
+ *   with full readability.
  */
 public final class DynamicSignatureOverlay {
 
-    public static final int ADOBE_GREEN = Color.rgb(0, 180, 60); // #00B43C
-    public static final int ADOBE_GREEN_TEXT = Color.rgb(0, 130, 40);
-    public static final int TEXT_DARK = Color.rgb(38, 50, 56);
-    public static final int TEXT_MUTED = Color.rgb(84, 110, 122);
-    public static final int BORDER_COLOR = Color.rgb(207, 216, 220);
+    public static final int ADOBE_GREEN = Color.rgb(0, 161, 40); // #00A128 Adobe Acrobat green
+    public static final int TEXT_BLACK = Color.BLACK;
 
     private DynamicSignatureOverlay() { }
 
-    /**
-     * Dynamically paints the verified signature badge over the specified widget coordinates.
-     *
-     * @param canvas Target Android Canvas (display Bitmap or PrintDocument canvas)
-     * @param bounds Bounding box of the signature widget in canvas pixels
-     * @param signerName Common Name or Subject of the signer
-     * @param signingDate Claimed or timestamped signing date
-     * @param isVerified Whether cryptographic verification and CA path validation succeeded
-     */
     public static void drawSignatureBadge(Canvas canvas, RectF bounds, String signerName, String signingDate, boolean isVerified) {
+        drawSignatureBadge(canvas, bounds, signerName, signingDate, null, isVerified);
+    }
+
+    public static void drawSignatureBadge(Canvas canvas, RectF bounds, String signerName, String signingDate,
+                                          List<String> detailLines, boolean isVerified) {
         if (canvas == null || bounds == null || bounds.width() <= 0 || bounds.height() <= 0) return;
 
         float width = bounds.width();
@@ -46,69 +56,61 @@ public final class DynamicSignatureOverlay {
         float aspectRatio = width / height;
 
         if (!isVerified) {
-            // Draw unverified / question mark state if unverified
             drawUnverifiedBadge(canvas, bounds);
             return;
         }
 
-        // Draw opaque background to cleanly cover underlying unverified /n1 question mark and /n4
+        // 1. Clean white background (no rounded corners, NO border stroke) to mask underlying unverified icon/text
         Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         bgPaint.setColor(Color.WHITE);
         bgPaint.setStyle(Paint.Style.FILL);
-        canvas.drawRoundRect(bounds, Math.min(width, height) * 0.05f, Math.min(width, height) * 0.05f, bgPaint);
+        canvas.drawRect(bounds, bgPaint);
 
-        Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        borderPaint.setColor(BORDER_COLOR);
-        borderPaint.setStyle(Paint.Style.STROKE);
-        borderPaint.setStrokeWidth(Math.max(1f, height * 0.02f));
-        canvas.drawRoundRect(bounds, Math.min(width, height) * 0.05f, Math.min(width, height) * 0.05f, borderPaint);
+        // 2. Proportional layout depending on aspect ratio
+        if (aspectRatio < 1.2f) {
+            // Square / compact signature: prominent checkmark centered
+            float checkSize = Math.min(width, height) * 0.85f;
+            drawAdobeCheckmark(canvas, bounds.centerX(), bounds.centerY(), checkSize);
+        } else if (aspectRatio >= 2.5f) {
+            // Wide banner signature: checkmark on left, text on right
+            float checkSize = height * 0.82f;
+            float iconCx = bounds.left + height * 0.5f;
+            float iconCy = bounds.centerY();
+            drawAdobeCheckmark(canvas, iconCx, iconCy, checkSize);
 
-        if (aspectRatio <= 1.35f) {
-            // Square or icon-only widget: fill with prominent checkmark
-            RectF iconBounds = new RectF(
-                    bounds.left + width * 0.06f,
-                    bounds.top + height * 0.06f,
-                    bounds.right - width * 0.06f,
-                    bounds.bottom - height * 0.06f
-            );
-            drawAdobeCheckmark(canvas, iconBounds);
-        } else {
-            // Horizontal compound widget: icon on left, status + signer details on right
-            float iconBoxWidth = Math.min(width * 0.32f, height);
-            RectF iconBounds = new RectF(
-                    bounds.left + width * 0.02f,
-                    bounds.top + height * 0.05f,
-                    bounds.left + iconBoxWidth - width * 0.02f,
-                    bounds.bottom - height * 0.05f
-            );
-            drawAdobeCheckmark(canvas, iconBounds);
-
-            float textLeft = bounds.left + iconBoxWidth + width * 0.015f;
+            float textLeft = bounds.left + height * 1.05f;
             float textRight = bounds.right - width * 0.02f;
-            float textTop = bounds.top + height * 0.12f;
-            float textHeight = bounds.height() * 0.76f;
+            drawSignatureText(canvas, textLeft, bounds.top, textRight - textLeft, height, signerName, signingDate, detailLines);
+        } else {
+            // Standard rectangular signature (Aadhaar 50x30 pt, eSign, etc.):
+            // Adobe places the checkmark centered in the middle-left behind the text
+            float checkSize = height * 0.82f;
+            float iconCx = bounds.left + width * 0.46f;
+            float iconCy = bounds.top + height * 0.58f;
 
-            drawSignatureDetailsText(canvas, textLeft, textTop, textRight - textLeft, textHeight, signerName, signingDate);
+            // Draw checkmark FIRST
+            drawAdobeCheckmark(canvas, iconCx, iconCy, checkSize);
+
+            // Draw text ON TOP of checkmark
+            float textLeft = bounds.left + width * 0.04f;
+            float textRight = bounds.right - width * 0.02f;
+            drawSignatureText(canvas, textLeft, bounds.top, textRight - textLeft, height, signerName, signingDate, detailLines);
         }
     }
 
     /**
-     * Draws the Adobe-standard verified checkmark vector with black outline, drop shadow, and green fill.
+     * Draws the Adobe-standard verified checkmark vector with black drop shadow, outline, and green fill.
      */
-    public static void drawAdobeCheckmark(Canvas canvas, RectF iconRect) {
-        float width = iconRect.width();
-        float height = iconRect.height();
-        // Path box is 182x180. Scale to fit comfortably within the iconRect.
-        float scale = Math.min(width * 0.88f / 182f, height * 0.88f / 180f);
-        if (scale <= 0) scale = 0.2f;
+    public static void drawAdobeCheckmark(Canvas canvas, float cx, float cy, float size) {
+        if (size <= 0) size = 20f;
+        float scale = size / 100.0f;
 
-        float cx = iconRect.centerX();
-        float cy = iconRect.centerY();
+        float shadowOffsetX = 2.5f * scale;
+        float shadowOffsetY = 3.8f * scale;
+        float strokeWidth = Math.max(1.0f, 1.6f * scale);
 
-        float strokeWidth = Math.max(1.8f, 18f * scale);
-        float shadowOffsetX = 3.5f * scale;
-        float shadowOffsetY = 5.5f * scale;
-
+        // Normalized Adobe 6-point checkmark path:
+        // (0, 62), (8, 51), (38, 77), (86, 0), (100, 11), (36, 100)
         Path path = new Path();
         createCheckmarkPath(path, cx, cy, scale);
 
@@ -117,22 +119,19 @@ public final class DynamicSignatureOverlay {
         createCheckmarkPath(shadowPath, cx + shadowOffsetX, cy + shadowOffsetY, scale);
         Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         shadowPaint.setColor(Color.BLACK);
-        shadowPaint.setStyle(Paint.Style.FILL_AND_STROKE);
-        shadowPaint.setStrokeWidth(strokeWidth);
-        shadowPaint.setStrokeJoin(Paint.Join.ROUND);
-        shadowPaint.setStrokeCap(Paint.Cap.ROUND);
+        shadowPaint.setStyle(Paint.Style.FILL);
         canvas.drawPath(shadowPath, shadowPaint);
 
-        // 2. Black Outer Border Stroke
+        // 2. Black Outer Border Outline
         Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         strokePaint.setColor(Color.BLACK);
-        strokePaint.setStyle(Paint.Style.FILL_AND_STROKE);
+        strokePaint.setStyle(Paint.Style.STROKE);
         strokePaint.setStrokeWidth(strokeWidth);
-        strokePaint.setStrokeJoin(Paint.Join.ROUND);
-        strokePaint.setStrokeCap(Paint.Cap.ROUND);
+        strokePaint.setStrokeJoin(Paint.Join.MITER);
+        strokePaint.setStrokeCap(Paint.Cap.SQUARE);
         canvas.drawPath(path, strokePaint);
 
-        // 3. Vibrant Adobe Green Fill
+        // 3. Vibrant Adobe Green Fill (#00A128)
         Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         fillPaint.setColor(ADOBE_GREEN);
         fillPaint.setStyle(Paint.Style.FILL);
@@ -140,85 +139,132 @@ public final class DynamicSignatureOverlay {
     }
 
     private static void createCheckmarkPath(Path path, float cx, float cy, float scale) {
-        // SVG Vector: M 12 122 L 30 102 L 80 158 L 170 12 L 194 30 L 78 192 Z (Center: 103, 102)
-        float p1x = cx + (12f - 103f) * scale;
-        float p1y = cy + (122f - 102f) * scale;
-
-        float p2x = cx + (30f - 103f) * scale;
-        float p2y = cy + (102f - 102f) * scale;
-
-        float p3x = cx + (80f - 103f) * scale;
-        float p3y = cy + (158f - 102f) * scale;
-
-        float p4x = cx + (170f - 103f) * scale;
-        float p4y = cy + (12f - 102f) * scale;
-
-        float p5x = cx + (194f - 103f) * scale;
-        float p5y = cy + (30f - 102f) * scale;
-
-        float p6x = cx + (78f - 103f) * scale;
-        float p6y = cy + (192f - 102f) * scale;
+        float[][] pts = {
+                {0f, 62f},
+                {8f, 51f},
+                {38f, 77f},
+                {86f, 0f},
+                {100f, 11f},
+                {36f, 100f}
+        };
 
         path.reset();
-        path.moveTo(p1x, p1y);
-        path.lineTo(p2x, p2y);
-        path.lineTo(p3x, p3y);
-        path.lineTo(p4x, p4y);
-        path.lineTo(p5x, p5y);
-        path.lineTo(p6x, p6y);
+        for (int i = 0; i < pts.length; i++) {
+            float x = cx + (pts[i][0] - 50f) * scale;
+            float y = cy + (pts[i][1] - 50f) * scale;
+            if (i == 0) {
+                path.moveTo(x, y);
+            } else {
+                path.lineTo(x, y);
+            }
+        }
         path.close();
     }
 
-    private static void drawSignatureDetailsText(Canvas canvas, float left, float top, float maxWidth, float maxHeight,
-                                                 String signerName, String signingDate) {
-        // Line 1: 'Signature valid'
-        float titleSize = Math.max(9f, maxHeight * 0.28f);
+    private static void drawSignatureText(Canvas canvas, float left, float top, float maxWidth, float maxHeight,
+                                          String signerName, String signingDate, List<String> detailLines) {
+        // Line 0: "Signature valid" (Adobe Acrobat Title: Black, Bold)
+        float titleSize = Math.max(8f, maxHeight * 0.17f);
         Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        titlePaint.setColor(ADOBE_GREEN_TEXT);
+        titlePaint.setColor(TEXT_BLACK);
         titlePaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
         titlePaint.setTextSize(titleSize);
-        canvas.drawText("Signature valid", left, top + titleSize, titlePaint);
+        canvas.drawText("Signature valid", left, top + titleSize * 1.0f, titlePaint);
 
-        // Details lines
-        float detailSize = Math.max(7f, maxHeight * 0.18f);
+        // Details lines (Adobe Acrobat Text: Black, Regular, drawn cleanly over the checkmark)
+        float detailSize = Math.max(6f, maxHeight * 0.115f);
         Paint detailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        detailPaint.setColor(TEXT_DARK);
+        detailPaint.setColor(TEXT_BLACK);
+        detailPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
         detailPaint.setTextSize(detailSize);
 
-        float currentY = top + titleSize + detailSize * 1.35f;
+        float lineSpacing = detailSize * 1.18f;
+        float currentY = top + titleSize + lineSpacing * 0.95f;
 
-        String safeSigner = (signerName != null && !signerName.isEmpty()) ? signerName : "Signer";
-        if (safeSigner.length() > 36) {
-            safeSigner = safeSigner.substring(0, 34) + "...";
+        List<String> linesToDraw;
+        if (detailLines != null && !detailLines.isEmpty()) {
+            linesToDraw = detailLines;
+        } else {
+            linesToDraw = new ArrayList<>();
+            String safeSigner = (signerName != null && !signerName.isEmpty()) ? signerName : "Signer";
+            if (safeSigner.length() > 32) {
+                int splitIdx = safeSigner.lastIndexOf(' ', 30);
+                if (splitIdx > 10) {
+                    linesToDraw.add("Digitally signed by " + safeSigner.substring(0, splitIdx));
+                    linesToDraw.add(safeSigner.substring(splitIdx + 1));
+                } else {
+                    linesToDraw.add("Digitally signed by " + safeSigner.substring(0, 30));
+                    linesToDraw.add(safeSigner.substring(30));
+                }
+            } else {
+                linesToDraw.add("Digitally signed by " + safeSigner);
+            }
+            if (signingDate != null && !signingDate.isEmpty()) {
+                linesToDraw.add("Date: " + signingDate);
+            }
         }
-        canvas.drawText("Digitally signed by " + safeSigner, left, currentY, detailPaint);
 
-        if (signingDate != null && !signingDate.isEmpty()) {
-            currentY += detailSize * 1.35f;
-            Paint datePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-            datePaint.setColor(TEXT_MUTED);
-            datePaint.setTextSize(detailSize);
-            canvas.drawText("Date: " + signingDate, left, currentY, datePaint);
+        for (String line : linesToDraw) {
+            if (currentY > top + maxHeight + detailSize) break;
+            canvas.drawText(line, left, currentY, detailPaint);
+            currentY += lineSpacing;
         }
     }
 
     private static void drawUnverifiedBadge(Canvas canvas, RectF bounds) {
         Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        bgPaint.setColor(Color.rgb(255, 248, 225)); // Light amber
+        bgPaint.setColor(Color.WHITE);
         bgPaint.setStyle(Paint.Style.FILL);
-        canvas.drawRoundRect(bounds, 4, 4, bgPaint);
-
-        Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        borderPaint.setColor(Color.rgb(255, 179, 0)); // Amber
-        borderPaint.setStyle(Paint.Style.STROKE);
-        borderPaint.setStrokeWidth(1.5f);
-        canvas.drawRoundRect(bounds, 4, 4, borderPaint);
+        canvas.drawRect(bounds, bgPaint);
 
         Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        textPaint.setColor(Color.rgb(230, 81, 0));
+        textPaint.setColor(Color.rgb(230, 81, 0)); // Amber/Orange
         textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
         textPaint.setTextSize(Math.max(10f, bounds.height() * 0.4f));
         textPaint.setTextAlign(Paint.Align.CENTER);
         canvas.drawText("?", bounds.centerX(), bounds.centerY() + textPaint.getTextSize() * 0.35f, textPaint);
+    }
+
+    /**
+     * Extracts existing multi-line signature appearance text from /n2 sub-form XObject if present.
+     */
+    public static List<String> extractAppearanceTextLines(PDAnnotationWidget widget) {
+        if (widget == null) return null;
+        try {
+            PDAppearanceDictionary ap = widget.getAppearance();
+            if (ap == null) return null;
+            PDAppearanceEntry norm = ap.getNormalAppearance();
+            if (norm == null || !norm.isStream()) return null;
+            PDAppearanceStream stream = norm.getAppearanceStream();
+            if (stream == null || stream.getResources() == null) return null;
+
+            PDResources res = stream.getResources();
+            PDXObject frm = res.getXObject(COSName.getPDFName("FRM"));
+            if (frm instanceof PDFormXObject) {
+                PDResources frmRes = ((PDFormXObject) frm).getResources();
+                if (frmRes != null) {
+                    PDXObject n2 = frmRes.getXObject(COSName.getPDFName("n2"));
+                    if (n2 instanceof PDFormXObject) {
+                        try (InputStream is = ((PDFormXObject) n2).getContentStream().createInputStream()) {
+                            byte[] bytes = new byte[is.available()];
+                            is.read(bytes);
+                            String s = new String(bytes, StandardCharsets.ISO_8859_1);
+                            Matcher m = Pattern.compile("\\((.*?)\\)Tj").matcher(s);
+                            List<String> lines = new ArrayList<>();
+                            while (m.find()) {
+                                String line = m.group(1).trim();
+                                if (!line.isEmpty()) {
+                                    lines.add(line);
+                                }
+                            }
+                            if (!lines.isEmpty()) {
+                                return lines;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) { }
+        return null;
     }
 }
