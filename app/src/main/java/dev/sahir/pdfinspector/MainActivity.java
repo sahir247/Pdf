@@ -195,21 +195,28 @@ public final class MainActivity extends Activity {
                     if (signers.isEmpty()) throw new SecurityException("CMS contains no signers.");
 
                     JcaX509CertificateConverter converter = new JcaX509CertificateConverter().setProvider("BC");
-                    boolean anyValid = false;
+                    boolean allSignersValid = !signers.isEmpty();
                     for (SignerInformation signer : signers) {
                         Collection<X509CertificateHolder> matches = cms.getCertificates().getMatches(signer.getSID());
+                        boolean thisSignerValid = false;
+                        X509Certificate verifiedCertificate = null;
                         for (X509CertificateHolder holder : matches) {
                             X509Certificate cert = converter.getCertificate(holder);
                             boolean verified = signer.verify(new JcaSimpleSignerInfoVerifierBuilder().setProvider("BC").build(cert));
                             if (verified) {
-                                anyValid = true;
-                                record.certificate = cert;
+                                thisSignerValid = true;
+                                verifiedCertificate = cert;
                                 break;
                             }
-                            if (record.certificate == null) record.certificate = cert;
+                        }
+                        if (!thisSignerValid) {
+                            allSignersValid = false;
+                        } else if (record.certificate == null) {
+                            record.certificate = verifiedCertificate;
                         }
                     }
-                    record.cryptoValid = anyValid && record.byteRangePlausible;
+                    // Do not treat one valid signer as sufficient when CMS contains multiple signers.
+                    record.cryptoValid = allSignersValid && record.byteRangePlausible;
                     if (record.certificate != null) record.fingerprint = TrustedCertificateStore.fingerprint(record.certificate);
                     report.append("Signer certificate: ").append(record.certificate == null ? "Not found in CMS" : record.certificate.getSubjectX500Principal().getName()).append("\n");
                     report.append("SHA-256: ").append(record.fingerprint == null ? "Unavailable" : record.fingerprint).append("\n");
@@ -219,7 +226,7 @@ public final class MainActivity extends Activity {
                     report.append("Revocation: UNKNOWN (not checked)\n");
                     report.append("PDF revision / permitted changes: NOT FULLY ANALYZED\n");
 
-                    if (record.certificate != null) {
+                    if (record.certificate != null && record.cryptoValid) {
                         final SignatureRecord selected = record;
                         Button add = button(trustStore.isTrusted(record.certificate) ? "Certificate already trusted · Manage" : "Add signer certificate to trusted list");
                         add.setOnClickListener(v -> {
