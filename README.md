@@ -5,6 +5,9 @@ Native Android prototype for inspecting embedded PDF digital signatures and mana
 ## Included in this build
 
 - Open a PDF through Android's system document picker; no broad file-storage permission is required.
+- Save an **unchanged original copy** of the selected PDF at any time. This does not add a signature.
+- Digitally sign a PDF into a separate output file using a user-selected PKCS#12 (.p12/.pfx) identity containing a private key and certificate. The signature is embedded as a detached CMS signature in an incremental PDF revision; the private-key password is used transiently and is not saved by the app.
+- Signing requires an actual private key. A public certificate, a certificate pin, or the bundled CCA root cannot sign documents. Whether a resulting signature is legally accepted depends on the identity, certificate policy, recipient requirements, and independent validation.
 - Discover PDF signature dictionaries and evaluate CMS signer information with Bouncy Castle.
 - Report each CMS signer independently, including signature mathematics, its SHA-256 certificate fingerprint, current certificate dates, and local pin status.
 - Perform a structural `/ByteRange` check, including range bounds and the excluded `/Contents` hex-string shape.
@@ -16,6 +19,12 @@ Native Android prototype for inspecting embedded PDF digital signatures and mana
 - Keep local signer pins separate from the Android CA store and from PKIX path status. A pinned leaf does not become a trusted issuer or trust sibling certificates.
 - Bundle the CCA India 2022 root for document-signing validation. The packaged PEM is fingerprint-pinned to SHA-256 `9A:3F:D3:17:67:98:E8:42:DD:CB:12:C2:62:F1:1C:FA:CC:A7:0A:8B:84:C6:EA:6F:DA:30:84:2A:95:A9:4C:D8`, checked for CA usage, self-signature, and current validity at runtime. The special-purpose CCA India 2022 SPL root is intentionally not trusted for document signatures.
 - Disable Android automatic backup so local trust decisions are not silently copied to another device.
+
+## PDF signing workflow
+
+Choose a PDF, tap **Sign PDF with a certificate**, select your own PKCS#12 identity, enter its password, then choose where to save the new signed output. Reopen the saved file in this app or an independent PDF validator to check the embedded signature. The separate **Save original PDF copy** action copies the source bytes without modifying them.
+
+The current signing implementation creates a detached CMS signature with SHA-256 and an RSA, ECDSA, or DSA private key. It does not obtain a qualified/remote signing identity, provide a trusted timestamp, or establish that a self-managed certificate is accepted by a recipient. Do not use it to claim a government/CCA signature unless you are using an authorized signing identity and the recipient independently accepts its chain and policy.
 
 ## Validation coverage and critical limitations
 
