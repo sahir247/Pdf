@@ -60,11 +60,61 @@ public final class DynamicSignatureOverlay {
             return;
         }
 
-        // 1. Clean white background (no rounded corners, NO border stroke) to mask underlying unverified icon/text
+        List<String> linesToDraw;
+        if (detailLines != null && !detailLines.isEmpty()) {
+            linesToDraw = detailLines;
+        } else {
+            linesToDraw = new ArrayList<>();
+            String safeSigner = (signerName != null && !signerName.isEmpty()) ? signerName : "Signer";
+            if (safeSigner.length() > 32) {
+                int splitIdx = safeSigner.lastIndexOf(' ', 30);
+                if (splitIdx > 10) {
+                    linesToDraw.add("Digitally signed by " + safeSigner.substring(0, splitIdx));
+                    linesToDraw.add(safeSigner.substring(splitIdx + 1));
+                } else {
+                    linesToDraw.add("Digitally signed by " + safeSigner.substring(0, 30));
+                    linesToDraw.add(safeSigner.substring(30));
+                }
+            } else {
+                linesToDraw.add("Digitally signed by " + safeSigner);
+            }
+            if (signingDate != null && !signingDate.isEmpty()) {
+                linesToDraw.add("Date: " + signingDate);
+            }
+        }
+
+        // Adobe Acrobat DC typography proportions:
+        // /n4 title: 4.7 pt on a 30 pt widget = 0.1566
+        // /n2 details: 3.4 pt on a 30 pt widget = 0.1133
+        // Line spacing: 3.4 pt on a 30 pt widget = 0.1133
+        // Removed high Math.max(8f/6f) floors which distorted 72 DPI print adapter canvas
+        float titleSize = Math.max(2.5f, height * 0.155f);
+        float detailSize = Math.max(2.0f, height * 0.112f);
+        float lineSpacing = detailSize * 1.05f;
+
+        Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        titlePaint.setColor(TEXT_BLACK);
+        titlePaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        titlePaint.setTextSize(titleSize);
+
+        Paint detailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        detailPaint.setColor(TEXT_BLACK);
+        detailPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
+        detailPaint.setTextSize(detailSize);
+
+        float textLeft = bounds.left + width * 0.04f;
+        float maxTextWidth = titlePaint.measureText("Signature valid");
+        for (String line : linesToDraw) {
+            float lw = detailPaint.measureText(line);
+            if (lw > maxTextWidth) maxTextWidth = lw;
+        }
+
+        // 1. Clean white background covering the widget AND any text overflow
+        float maxRight = Math.max(bounds.right, textLeft + maxTextWidth + width * 0.04f);
         Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         bgPaint.setColor(Color.WHITE);
         bgPaint.setStyle(Paint.Style.FILL);
-        canvas.drawRect(bounds, bgPaint);
+        canvas.drawRect(bounds.left, bounds.top, maxRight, bounds.bottom, bgPaint);
 
         // 2. Proportional layout depending on aspect ratio
         if (aspectRatio < 1.2f) {
@@ -78,23 +128,23 @@ public final class DynamicSignatureOverlay {
             float iconCy = bounds.centerY();
             drawAdobeCheckmark(canvas, iconCx, iconCy, checkSize);
 
-            float textLeft = bounds.left + height * 1.05f;
-            float textRight = bounds.right - width * 0.02f;
-            drawSignatureText(canvas, textLeft, bounds.top, textRight - textLeft, height, signerName, signingDate, detailLines);
+            float bannerTextLeft = bounds.left + height * 1.05f;
+            drawSignatureTextInternal(canvas, bannerTextLeft, bounds.top, titlePaint, detailPaint, titleSize, lineSpacing, linesToDraw);
         } else {
             // Standard rectangular signature (Aadhaar 50x30 pt, eSign, etc.):
-            // Adobe places the checkmark centered in the middle-left behind the text
-            float checkSize = height * 0.82f;
-            float iconCx = bounds.left + width * 0.46f;
-            float iconCy = bounds.top + height * 0.58f;
+            // In Adobe Acrobat DC parity:
+            // Checkmark center X is placed at 51.4% of the text block width!
+            // Checkmark center Y is at 50.5% of the text block height!
+            // Checkmark height is 77% of the text block height!
+            float checkSize = height * 0.77f;
+            float iconCx = textLeft + maxTextWidth * 0.514f;
+            float iconCy = bounds.top + height * 0.505f;
 
             // Draw checkmark FIRST
             drawAdobeCheckmark(canvas, iconCx, iconCy, checkSize);
 
             // Draw text ON TOP of checkmark
-            float textLeft = bounds.left + width * 0.04f;
-            float textRight = bounds.right - width * 0.02f;
-            drawSignatureText(canvas, textLeft, bounds.top, textRight - textLeft, height, signerName, signingDate, detailLines);
+            drawSignatureTextInternal(canvas, textLeft, bounds.top, titlePaint, detailPaint, titleSize, lineSpacing, linesToDraw);
         }
     }
 
@@ -161,51 +211,16 @@ public final class DynamicSignatureOverlay {
         path.close();
     }
 
-    private static void drawSignatureText(Canvas canvas, float left, float top, float maxWidth, float maxHeight,
-                                          String signerName, String signingDate, List<String> detailLines) {
+    private static void drawSignatureTextInternal(Canvas canvas, float left, float top,
+                                                  Paint titlePaint, Paint detailPaint,
+                                                  float titleSize, float lineSpacing,
+                                                  List<String> linesToDraw) {
         // Line 0: "Signature valid" (Adobe Acrobat Title: Black, Bold)
-        float titleSize = Math.max(8f, maxHeight * 0.17f);
-        Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        titlePaint.setColor(TEXT_BLACK);
-        titlePaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-        titlePaint.setTextSize(titleSize);
-        canvas.drawText("Signature valid", left, top + titleSize * 1.0f, titlePaint);
+        canvas.drawText("Signature valid", left, top + titleSize, titlePaint);
 
         // Details lines (Adobe Acrobat Text: Black, Regular, drawn cleanly over the checkmark)
-        float detailSize = Math.max(6f, maxHeight * 0.115f);
-        Paint detailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        detailPaint.setColor(TEXT_BLACK);
-        detailPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
-        detailPaint.setTextSize(detailSize);
-
-        float lineSpacing = detailSize * 1.18f;
-        float currentY = top + titleSize + lineSpacing * 0.95f;
-
-        List<String> linesToDraw;
-        if (detailLines != null && !detailLines.isEmpty()) {
-            linesToDraw = detailLines;
-        } else {
-            linesToDraw = new ArrayList<>();
-            String safeSigner = (signerName != null && !signerName.isEmpty()) ? signerName : "Signer";
-            if (safeSigner.length() > 32) {
-                int splitIdx = safeSigner.lastIndexOf(' ', 30);
-                if (splitIdx > 10) {
-                    linesToDraw.add("Digitally signed by " + safeSigner.substring(0, splitIdx));
-                    linesToDraw.add(safeSigner.substring(splitIdx + 1));
-                } else {
-                    linesToDraw.add("Digitally signed by " + safeSigner.substring(0, 30));
-                    linesToDraw.add(safeSigner.substring(30));
-                }
-            } else {
-                linesToDraw.add("Digitally signed by " + safeSigner);
-            }
-            if (signingDate != null && !signingDate.isEmpty()) {
-                linesToDraw.add("Date: " + signingDate);
-            }
-        }
-
+        float currentY = top + titleSize + lineSpacing * 1.15f;
         for (String line : linesToDraw) {
-            if (currentY > top + maxHeight + detailSize) break;
             canvas.drawText(line, left, currentY, detailPaint);
             currentY += lineSpacing;
         }
