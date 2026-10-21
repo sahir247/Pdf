@@ -126,17 +126,7 @@ public final class DynamicSignatureOverlay {
         bgPaint.setStyle(Paint.Style.FILL);
         canvas.drawRect(bounds.left, bounds.top, bounds.right, bounds.bottom, bgPaint);
 
-        // 2. Draw Adobe green checkmark vector at the exact /n1 matrix
-        float pdfCx = layout.n1Tx + 50.0f * layout.n1Scale;
-        float pdfCy = layout.n1Ty + 50.0f * layout.n1Scale;
-
-        float iconCx = bounds.left + pdfCx * scaleX;
-        float iconCy = bounds.bottom - pdfCy * scaleY; // PDF Y is from bottom; Canvas Y is from top
-        float checkSize = (100.0f * layout.n1Scale) * scaleY;
-
-        drawAdobeCheckmark(canvas, iconCx, iconCy, checkSize);
-
-        // 3. Draw "Signature valid" title at exact /n4 baseline
+        // 2. Prepare "Signature valid" title paint and baseline coordinates
         Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         titlePaint.setColor(TEXT_BLACK);
         if (layout.titleFontSize >= 8.0f) {
@@ -149,9 +139,26 @@ public final class DynamicSignatureOverlay {
 
         float titleX = bounds.left + (layout.titleX >= 0 ? layout.titleX : 2.0f) * scaleX;
         float titleY = bounds.bottom - (layout.titleY >= 0 ? layout.titleY : 23.3f) * scaleY;
+
+        // 3. Draw Adobe green checkmark vector
+        // In Adobe Acrobat DC, the checkmark top tip terminates precisely in the letter 'a' of "valid":
+        float widthSigV = titlePaint.measureText("Signature v");
+        float widthA = titlePaint.measureText("a");
+        float tipX = titleX + widthSigV + 0.35f * widthA;
+        float tipY = titleY - 0.45f * canvasTitleSize;
+
+        float checkSize = (layout.n1Scale > 0 ? layout.n1Scale * (layout.titleFontSize >= 8.0f ? 72.0f : 44.0f) : canvasTitleSize * 2.55f) * scaleY;
+        float checkScale = checkSize / 100.0f;
+
+        float iconCx = tipX - 36.0f * checkScale;
+        float iconCy = tipY + 50.0f * checkScale;
+
+        drawAdobeCheckmark(canvas, iconCx, iconCy, checkSize);
+
+        // 4. Draw "Signature valid" title on top
         canvas.drawText("Signature valid", titleX, titleY, titlePaint);
 
-        // 4. Draw detail lines at exact /n2 baselines
+        // 5. Draw detail lines at exact /n2 baselines
         Paint detailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         detailPaint.setColor(TEXT_BLACK);
         detailPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
@@ -242,10 +249,16 @@ public final class DynamicSignatureOverlay {
             float bannerTextLeft = bounds.left + height * 1.05f;
             drawSignatureTextInternal(canvas, bannerTextLeft, bounds.top, titlePaint, detailPaint, titleSize, lineSpacing, linesToDraw);
         } else {
-            // Standard rectangular signature
-            float checkSize = height * 0.77f;
-            float iconCx = textLeft + maxTextWidth * 0.514f;
-            float iconCy = bounds.top + height * 0.505f;
+            // Standard rectangular signature (Aadhaar, eSign)
+            float widthSigV = titlePaint.measureText("Signature v");
+            float widthA = titlePaint.measureText("a");
+            float tipX = textLeft + widthSigV + 0.35f * widthA;
+            float tipY = bounds.top + titleSize - 0.45f * titleSize;
+
+            float checkSize = titleSize * 2.55f;
+            float checkScale = checkSize / 100.0f;
+            float iconCx = tipX - 36.0f * checkScale;
+            float iconCy = tipY + 50.0f * checkScale;
 
             drawAdobeCheckmark(canvas, iconCx, iconCy, checkSize);
             drawSignatureTextInternal(canvas, textLeft, bounds.top, titlePaint, detailPaint, titleSize, lineSpacing, linesToDraw);
