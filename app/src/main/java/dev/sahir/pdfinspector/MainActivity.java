@@ -391,13 +391,37 @@ public final class MainActivity extends Activity {
                 try {
                     inspectPdf();
                 } catch (Exception e) {
-                    showStatus("Could not inspect PDF\\n" + safeMessage(e)
-                            + "\\n\\nThe password may be correct, but the file may be malformed, too large, or unsupported.");
+                    if (isPasswordFailure(e)) {
+                        currentPdfPassword = "";
+                        showPasswordDialog(true);
+                    } else {
+                        showStatus("Could not inspect PDF\\n" + safeMessage(e)
+                                + "\\n\\nThe password may be correct, but the file may be malformed, too large, or unsupported.");
+                    }
                 }
             });
         });
         dialog.show();
         passwordInput.requestFocus();
+    }
+
+    private boolean isPasswordFailure(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof InvalidPasswordException) return true;
+            String message = current.getMessage();
+            if (message != null) {
+                String normalized = message.toLowerCase(java.util.Locale.ROOT);
+                if (normalized.contains("cannot decrypt pdf")
+                        || normalized.contains("password is incorrect")
+                        || normalized.contains("incorrect password")
+                        || normalized.contains("invalid password")) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     /**
