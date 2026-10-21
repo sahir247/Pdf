@@ -33,6 +33,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.security.Security;
+import java.text.DateFormat;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -53,11 +54,18 @@ public final class MainActivity extends Activity {
 
     private static final class SignatureRecord {
         PDSignature signature;
+        boolean byteRangePlausible;
+        boolean coversCurrentFile;
+        long signedRevisionEnd;
+        String parseError;
+        final List<SignerRecord> signers = new ArrayList<>();
+    }
+
+    private static final class SignerRecord {
         X509Certificate certificate;
         boolean cryptoValid;
-        boolean byteRangePlausible;
-        String detail;
         String fingerprint;
+        CertificatePathValidator.Result pathResult;
     }
 
     @Override public void onCreate(Bundle state) {
@@ -166,98 +174,201 @@ public final class MainActivity extends Activity {
         actions.removeAllViews();
         StringBuilder report = new StringBuilder();
         report.append(currentPdfName).append("\n\n");
+
         try (PDDocument document = PDDocument.load(new ByteArrayInputStream(currentPdf))) {
             List<PDSignature> signatures = document.getSignatureDictionaries();
             if (signatures == null || signatures.isEmpty()) {
-                showStatus(report.append("No embedded PDF digital signatures were found.\nA visible image of a signature is not a cryptographic signature.").toString());
+                showStatus(report.append("No embedded PDF digital signatures were found.\n")
+                        .append("A visible image of a signature is not a cryptographic signature.").toString());
                 return;
             }
-            report.append("Found ").append(signatures.size()).append(" signature(s).\n");
+
+            report.append("Found ").append(signatures.size()).append(" PDF signature dictionary/dictionaries.\n");
             int index = 0;
             for (PDSignature signature : signatures) {
                 index++;
                 SignatureRecord record = new SignatureRecord();
                 record.signature = signature;
-                record.byteRangePlausible = checkByteRange(signature.getByteRange(), currentPdf.length);
+                int[] range = signature.getByteRange();
+                record.byteRangePlausible = checkByteRange(range, currentPdf);
+                if (record.byteRangePlausible) {
+                    record.signedRevisionEnd = (long) range[2] + (long) range[3];
+                    record.coversCurrentFile = record.signedRevisionEnd == currentPdf.length;
+                }
+
                 report.append("\n────────────────────────\n");
-                report.append("Signature ").append(index).append("\n");
-                report.append("Field / signer name: ").append(emptyFallback(signature.getName(), "Not provided")).append("\n");
+                report.append("PDF signature ").append(index).append("\n");
+                report.append("PDF signer label (untrusted metadata): ")
+                        .append(emptyFallback(signature.getName(), "Not provided")).append("\n");
                 report.append("SubFilter: ").append(emptyFallback(signature.getSubFilter(), "Not provided")).append("\n");
-                report.append("Signing time claimed in PDF: ").append(signature.getSignDate() == null ? "Not provided" : signature.getSignDate().getTime().toString()).append("\n");
-                report.append("ByteRange bounds: ").append(record.byteRangePlausible ? "Plausible" : "Invalid or suspicious").append("\n");
+                report.append("Signing time claimed by PDF (not independently authenticated): ")
+                        .append(signature.getSignDate() == null ? "Not provided" : signature.getSignDate().getTime().toString())
+                        .append("\n");
+                report.append("ByteRange / excluded Contents syntax: ")
+                        .append(record.byteRangePlausible ? "STRUCTURALLY PLAUSIBLE" : "INVALID / SUSPICIOUS")
+                        .append("\n");
+
+                if (record.byteRangePlausible) {
+                    if (record.coversCurrentFile) {
+                        report.append("Revision coverage: ByteRange reaches current end-of-file. This does not detect hidden content ")
+                                .append("already present in the signed revision; full PDF revision / DocMDP analysis is not implemented.\n");
+                    } else {
+                        report.append("Revision coverage: signature ends at byte ").append(record.signedRevisionEnd)
+                                .append(" of ").append(currentPdf.length)
+                                .append(" bytes. Later bytes exist; incremental changes and their permissions are NOT evaluated.\n");
+                    }
+                } else {
+                    report.append("Revision coverage: UNKNOWN because ByteRange validation failed.\n");
+                    report.append("CMS cryptographic check: NOT RUN for this signature because the ByteRange is unsafe.\n");
+                    records.add(record);
+                    continue;
+                }
 
                 try {
                     byte[] cmsBytes = signature.getContents(currentPdf);
                     byte[] signedContent = signature.getSignedContent(currentPdf);
-                    // PDF signature /Contents fields are padded to a reserved size. With BC 1.85,
-                    // parsing the padded byte[] directly can fail with "Extra data detected in stream".
-                    // The stream constructor is the PDFBox-recommended compatibility workaround.
+                    // /Contents normally reserves more bytes than the CMS object uses. Parse through
+                    // a stream so trailing reservation padding does not break CMS parsing.
                     CMSSignedData cms = new CMSSignedData(
                             new CMSProcessableByteArray(signedContent),
                             new ByteArrayInputStream(cmsBytes));
                     SignerInformationStore signerStore = cms.getSignerInfos();
-                    Collection<SignerInformation> signers = signerStore.getSigners();
-                    if (signers.isEmpty()) throw new SecurityException("CMS contains no signers.");
+                    Collection<SignerInformation> cmsSigners = signerStore.getSigners();
+                    if (cmsSigners.isEmpty()) {
+                        throw new SecurityException("CMS contains no signers.");
+                    }
 
-                    JcaX509CertificateConverter converter = new JcaX509CertificateConverter().setProvider("BC");
-                    boolean allSignersValid = !signers.isEmpty();
-                    for (SignerInformation signer : signers) {
-                        Collection<X509CertificateHolder> matches = cms.getCertificates().getMatches(signer.getSID());
-                        boolean thisSignerValid = false;
-                        X509Certificate verifiedCertificate = null;
-                        for (X509CertificateHolder holder : matches) {
-                            X509Certificate cert = converter.getCertificate(holder);
-                            boolean verified = signer.verify(new JcaSimpleSignerInfoVerifierBuilder().setProvider("BC").build(cert));
+                    JcaX509CertificateConverter converter =
+                            new JcaX509CertificateConverter().setProvider("BC");
+                    List<X509Certificate> embeddedCertificates = new ArrayList<>();
+                    Collection<X509CertificateHolder> allHolders = cms.getCertificates().getMatches(null);
+                    for (X509CertificateHolder holder : allHolders) {
+                        try {
+                            embeddedCertificates.add(converter.getCertificate(holder));
+                        } catch (Exception ignored) {
+                            // An unusable embedded certificate must not crash inspection.
+                        }
+                    }
+
+                    int signerIndex = 0;
+                    for (SignerInformation cmsSigner : cmsSigners) {
+                        signerIndex++;
+                        SignerRecord signerRecord = new SignerRecord();
+                        Collection<X509CertificateHolder> matchingHolders =
+                                cms.getCertificates().getMatches(cmsSigner.getSID());
+
+                        for (X509CertificateHolder holder : matchingHolders) {
+                            X509Certificate candidate = converter.getCertificate(holder);
+                            if (signerRecord.certificate == null) signerRecord.certificate = candidate;
+                            boolean verified = cmsSigner.verify(
+                                    new JcaSimpleSignerInfoVerifierBuilder().setProvider("BC").build(candidate));
                             if (verified) {
-                                thisSignerValid = true;
-                                verifiedCertificate = cert;
+                                signerRecord.certificate = candidate;
+                                signerRecord.cryptoValid = true;
                                 break;
                             }
                         }
-                        if (!thisSignerValid) {
-                            allSignersValid = false;
-                        } else if (record.certificate == null) {
-                            record.certificate = verifiedCertificate;
+
+                        if (signerRecord.certificate != null) {
+                            signerRecord.fingerprint = TrustedCertificateStore.fingerprint(signerRecord.certificate);
+                            signerRecord.pathResult = CertificatePathValidator.validate(
+                                    signerRecord.certificate, embeddedCertificates);
+                        } else {
+                            signerRecord.pathResult = new CertificatePathValidator.Result(
+                                    CertificatePathValidator.Status.UNKNOWN,
+                                    "The CMS did not include a certificate matching this signer.");
+                        }
+                        record.signers.add(signerRecord);
+
+                        report.append("\n  CMS signer ").append(signerIndex).append("\n");
+                        report.append("  Signer certificate: ").append(signerRecord.certificate == null
+                                ? "Not found in CMS" : signerRecord.certificate.getSubjectX500Principal().getName()).append("\n");
+                        report.append("  Certificate SHA-256: ").append(signerRecord.fingerprint == null
+                                ? "Unavailable" : signerRecord.fingerprint).append("\n");
+                        report.append("  CMS signature mathematics: ")
+                                .append(signerRecord.cryptoValid ? "VERIFIED" : "NOT VERIFIED").append("\n");
+                        report.append("  Exact certificate pin: ")
+                                .append(signerRecord.certificate != null && trustStore.isTrusted(signerRecord.certificate)
+                                        ? "TRUSTED LOCALLY IN THIS APP" : "NOT TRUSTED BY PIN").append("\n");
+                        report.append("  Android system PKIX path: ")
+                                .append(signerRecord.pathResult.status.name()).append(" — ")
+                                .append(signerRecord.pathResult.summary).append("\n");
+                        report.append("  Certificate validity at current device time: ")
+                                .append(certificateDateStatus(signerRecord.certificate)).append("\n");
+                        report.append("  Revocation: UNKNOWN (CRL/OCSP not implemented)\n");
+                        report.append("  Trusted timestamp / historical signing time: NOT VALIDATED\n");
+
+                        if (signerRecord.certificate != null && signerRecord.cryptoValid) {
+                            final SignatureRecord selectedSignature = record;
+                            final SignerRecord selectedSigner = signerRecord;
+                            boolean pinned = trustStore.isTrusted(signerRecord.certificate);
+                            Button add = button(pinned
+                                    ? "View / manage this trusted signer certificate"
+                                    : "Review / add this exact signer certificate");
+                            add.setContentDescription("Certificate actions for CMS signer " + signerIndex
+                                    + " of PDF signature " + index);
+                            add.setOnClickListener(v -> {
+                                if (trustStore.isTrusted(selectedSigner.certificate)) {
+                                    showCertificateDetails(selectedSignature, selectedSigner);
+                                } else {
+                                    showTrustConfirmation(selectedSignature, selectedSigner);
+                                }
+                            });
+                            addSpaceIn(actions, 10);
+                            actions.addView(add);
                         }
                     }
-                    // Do not treat one valid signer as sufficient when CMS contains multiple signers.
-                    record.cryptoValid = allSignersValid && record.byteRangePlausible;
-                    if (record.certificate != null) record.fingerprint = TrustedCertificateStore.fingerprint(record.certificate);
-                    report.append("Signer certificate: ").append(record.certificate == null ? "Not found in CMS" : record.certificate.getSubjectX500Principal().getName()).append("\n");
-                    report.append("SHA-256: ").append(record.fingerprint == null ? "Unavailable" : record.fingerprint).append("\n");
-                    report.append("Cryptographic signature: ").append(record.cryptoValid ? "VALID" : "NOT VERIFIED").append("\n");
-                    report.append("Certificate pin: ").append(record.certificate != null && trustStore.isTrusted(record.certificate) ? "Trusted by you in this app" : "Not trusted by this app").append("\n");
-                    report.append("Certificate dates: ").append(certificateDateStatus(record.certificate)).append("\n");
-                    report.append("Revocation: UNKNOWN (not checked)\n");
-                    report.append("PDF revision / permitted changes: NOT FULLY ANALYZED\n");
 
-                    if (record.certificate != null && record.cryptoValid) {
-                        final SignatureRecord selected = record;
-                        Button add = button(trustStore.isTrusted(record.certificate) ? "Certificate already trusted · Manage" : "Add signer certificate to trusted list");
-                        add.setOnClickListener(v -> {
-                            if (trustStore.isTrusted(selected.certificate)) showCertificateDetails(selected);
-                            else showTrustConfirmation(selected);
-                        });
-                        addSpaceIn(actions, 10);
-                        actions.addView(add);
+                    if (record.signers.isEmpty()) {
+                        report.append("No CMS signer records were available.\n");
                     }
                 } catch (Exception e) {
-                    record.cryptoValid = false;
-                    report.append("Cryptographic signature: NOT VERIFIED\nReason: ").append(safeMessage(e)).append("\n");
+                    record.parseError = safeMessage(e);
+                    report.append("CMS parsing / verification could not be completed: ")
+                            .append(record.parseError).append("\n");
                 }
                 records.add(record);
             }
-            report.append("\nImportant: a cryptographically valid signature is not, by itself, proof that the signer is trusted or that all later PDF changes are safe.");
+
+            report.append("\nOVERALL RESULT: REVIEW REQUIRED — this build does not issue a full green-check validation.\n");
+            report.append("Revocation is unknown, trusted timestamps are not validated, and complete PDF revision / DocMDP / FieldMDP ")
+                    .append("analysis is not implemented. Exact pins do not override expiry, revocation, invalid cryptography, or document changes.");
             showStatus(report.toString());
         }
     }
 
-    private boolean checkByteRange(int[] range, int fileLength) {
-        if (range == null || range.length != 4) return false;
-        long a = range[0], b = range[1], c = range[2], d = range[3];
-        if (a != 0 || b < 0 || c < b || d < 0) return false;
-        if (b > fileLength || c > fileLength || d > fileLength) return false;
-        return c + d <= fileLength;
+    /**
+     * Validate the four ByteRange numbers and require the excluded byte span to be a PDF hex
+     * string (normally the signature dictionary's /Contents value). This is a structural check,
+     * not a complete PDF parser-based revision or shadow-attack analysis.
+     */
+    private boolean checkByteRange(int[] range, byte[] pdfBytes) {
+        if (range == null || range.length != 4 || pdfBytes == null) return false;
+
+        long start1 = range[0];
+        long length1 = range[1];
+        long start2 = range[2];
+        long length2 = range[3];
+        long fileLength = pdfBytes.length;
+
+        if (start1 != 0 || length1 <= 0 || start2 <= length1 || length2 <= 0) return false;
+        if (length1 > fileLength || start2 > fileLength || length2 > fileLength) return false;
+        long end2 = start2 + length2;
+        if (end2 < start2 || end2 > fileLength) return false;
+
+        int gapStart = (int) length1;
+        int gapEnd = (int) start2;
+        if (gapEnd - gapStart < 2) return false;
+
+        while (gapStart < gapEnd && isPdfWhitespace(pdfBytes[gapStart])) gapStart++;
+        while (gapEnd > gapStart && isPdfWhitespace(pdfBytes[gapEnd - 1])) gapEnd--;
+        return gapEnd - gapStart >= 2
+                && pdfBytes[gapStart] == '<'
+                && pdfBytes[gapEnd - 1] == '>';
+    }
+
+    private boolean isPdfWhitespace(byte value) {
+        return value == 0 || value == 9 || value == 10 || value == 12 || value == 13 || value == 32;
     }
 
     private String certificateDateStatus(X509Certificate certificate) {
@@ -272,45 +383,72 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void showTrustConfirmation(SignatureRecord record) {
-        if (record.certificate == null || record.fingerprint == null) {
+    private String certificateDateStatus(X509Certificate certificate) {
+        if (certificate == null) return "UNKNOWN (certificate unavailable)";
+        try {
+            certificate.checkValidity(new Date());
+            return "Valid at current device time";
+        } catch (java.security.cert.CertificateExpiredException e) {
+            return "EXPIRED now (historical validity not established)";
+        } catch (java.security.cert.CertificateNotYetValidException e) {
+            return "NOT YET VALID at current device time";
+        }
+    }
+
+    private void showTrustConfirmation(SignatureRecord signatureRecord, SignerRecord signerRecord) {
+        if (signerRecord.certificate == null || signerRecord.fingerprint == null) {
             toast("No signer certificate is available to trust.");
             return;
         }
-        X509Certificate cert = record.certificate;
+        X509Certificate cert = signerRecord.certificate;
+        String expectedFingerprint = signerRecord.fingerprint;
+
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(20), dp(8), dp(20), dp(4));
 
-        panel.addView(text("Trust only this exact signer certificate for PDF signature validation inside PDF Signature Inspector. This does not trust its issuer or any other certificate.", 14, false, 0xFF263746));
+        panel.addView(text("Trust only this exact signer certificate for PDF signature validation inside this app. "
+                + "This does not trust its issuer, another certificate from the same issuer, or other signers.", 14, false, 0xFF263746));
         addDialogSpace(panel, 12);
         panel.addView(text("SUBJECT", 11, true, 0xFF687785));
         panel.addView(text(cert.getSubjectX500Principal().getName(), 13, false, 0xFF17212B));
         addDialogSpace(panel, 8);
-        panel.addView(text("ISSUER", 11, true, 0xFF687785));
+        panel.addView(text("ISSUER (NOT AUTOMATICALLY TRUSTED)", 11, true, 0xFF687785));
         panel.addView(text(cert.getIssuerX500Principal().getName(), 13, false, 0xFF17212B));
         addDialogSpace(panel, 8);
-        panel.addView(text("SHA-256 FINGERPRINT", 11, true, 0xFF687785));
-        TextView fingerprint = text(record.fingerprint, 12, true, 0xFF17212B);
+        panel.addView(text("SERIAL NUMBER (HEX)", 11, true, 0xFF687785));
+        panel.addView(text(cert.getSerialNumber().toString(16).toUpperCase(java.util.Locale.ROOT), 13, false, 0xFF17212B));
+        addDialogSpace(panel, 8);
+        panel.addView(text("CERTIFICATE VALIDITY WINDOW", 11, true, 0xFF687785));
+        panel.addView(text(DateFormat.getDateTimeInstance().format(cert.getNotBefore()) + " — "
+                + DateFormat.getDateTimeInstance().format(cert.getNotAfter()), 13, false, 0xFF17212B));
+        addDialogSpace(panel, 8);
+        panel.addView(text("SHA-256 OF CERTIFICATE DER", 11, true, 0xFF687785));
+        TextView fingerprint = text(expectedFingerprint, 12, true, 0xFF17212B);
         fingerprint.setTextIsSelectable(true);
         panel.addView(fingerprint);
+
         Button copy = button("Copy full fingerprint");
         copy.setOnClickListener(v -> {
-            android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("Certificate SHA-256", record.fingerprint));
+            android.content.ClipboardManager cm =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("Certificate SHA-256", expectedFingerprint));
             toast("Fingerprint copied");
         });
         addDialogSpace(panel, 6);
         panel.addView(copy);
 
         CheckBox verified = new CheckBox(this);
-        verified.setText("I compared the full fingerprint with an independent, trusted source.");
+        verified.setText("I compared the entire SHA-256 fingerprint with an independent, trusted source.");
         verified.setTextColor(0xFF263746);
         verified.setTextSize(13);
+        verified.setContentDescription("Confirm independent verification of the full certificate SHA-256 fingerprint");
         addDialogSpace(panel, 8);
         panel.addView(verified);
 
-        TextView caveat = text("Revocation is not checked in this build. Certificate expiry, revocation, document revision changes and certification permissions are not overridden by trusting this certificate. A full green verification status is not available until those checks are implemented.", 12, false, 0xFF744B0B);
+        TextView caveat = text("This pin is a local trust decision, not proof that the certificate is unexpired, unrevoked, or chained to a public CA. "
+                + "Revocation and timestamp checks are not implemented. Document revision and certification-permission checks are incomplete. "
+                + "Trusting this certificate will not make an invalid signature pass.", 12, false, 0xFF744B0B);
         caveat.setPadding(dp(10), dp(10), dp(10), dp(10));
         caveat.setBackground(roundBg(0xFFFFF4D6, 0xFFFFD88A));
         addDialogSpace(panel, 8);
@@ -331,14 +469,14 @@ public final class MainActivity extends Activity {
             positive.setOnClickListener(v -> {
                 try {
                     String recalculated = TrustedCertificateStore.fingerprint(cert);
-                    if (!recalculated.equals(record.fingerprint)) {
+                    if (!recalculated.equals(expectedFingerprint)) {
                         toast("Certificate changed. Trust was not saved.");
                         dialog.dismiss();
                         return;
                     }
-                    trustStore.trust(cert);
+                    trustStore.trust(cert, verified.isChecked(), null);
                     dialog.dismiss();
-                    toast("Certificate trusted in this app only.");
+                    toast("Exact certificate trusted in this app only.");
                     inspectPdf();
                 } catch (Exception e) {
                     toast("Could not save trust: " + safeMessage(e));
@@ -348,24 +486,40 @@ public final class MainActivity extends Activity {
         dialog.show();
     }
 
-    private void showCertificateDetails(SignatureRecord record) {
-        X509Certificate cert = record.certificate;
-        String message = "This exact certificate is trusted by you in this app.\n\n" +
-                "SHA-256: " + record.fingerprint + "\n\n" +
-                "Subject: " + cert.getSubjectX500Principal().getName() + "\n\n" +
-                "Issuer: " + cert.getIssuerX500Principal().getName() + "\n\n" +
-                "Revocation: unknown; not checked.\n" +
-                "Revision / DocMDP analysis: incomplete.";
+    private void showCertificateDetails(SignatureRecord signatureRecord, SignerRecord signerRecord) {
+        X509Certificate cert = signerRecord.certificate;
+        TrustedCertificateStore.TrustMetadata metadata =
+                trustStore.getTrustMetadata(signerRecord.fingerprint);
+        String addedAt = metadata.trustedAtEpochMillis > 0
+                ? DateFormat.getDateTimeInstance().format(new Date(metadata.trustedAtEpochMillis))
+                : "Not recorded (legacy pin)";
+        String message = "This exact certificate is trusted by you in this app.\n\n"
+                + "SHA-256: " + signerRecord.fingerprint + "\n\n"
+                + "Subject: " + cert.getSubjectX500Principal().getName() + "\n\n"
+                + "Issuer: " + cert.getIssuerX500Principal().getName() + "\n\n"
+                + "Serial (hex): " + cert.getSerialNumber().toString(16).toUpperCase(java.util.Locale.ROOT) + "\n\n"
+                + "Certificate dates: " + DateFormat.getDateTimeInstance().format(cert.getNotBefore()) + " — "
+                + DateFormat.getDateTimeInstance().format(cert.getNotAfter()) + "\n\n"
+                + "Trust decision recorded: " + addedAt + "\n"
+                + "Fingerprint confirmation recorded: " + (metadata.fingerprintVerified ? "Yes" : "No/unknown") + "\n"
+                + "Policy version: " + metadata.policyVersion + "\n"
+                + "Purpose: " + metadata.purpose + "\n\n"
+                + "CMS signature mathematics: " + (signerRecord.cryptoValid ? "Verified" : "Not verified") + "\n"
+                + "Android system PKIX path: " + signerRecord.pathResult.status.name() + "\n"
+                + "Current certificate date status: " + certificateDateStatus(cert) + "\n"
+                + "Revocation: unknown; not checked.\n"
+                + "Timestamp: not validated.\n"
+                + "PDF revision / DocMDP / FieldMDP analysis: incomplete.";
         new AlertDialog.Builder(this).setTitle("Trusted signer certificate")
                 .setMessage(message)
                 .setNegativeButton("Close", null)
                 .setNeutralButton("Remove trust", (d, w) -> {
                     new AlertDialog.Builder(this)
                             .setTitle("Remove trusted certificate?")
-                            .setMessage("Future validations will no longer use this local trust decision.")
+                            .setMessage("This removes only the exact local certificate pin. A later validation will be recomputed.")
                             .setNegativeButton("Cancel", null)
                             .setPositiveButton("Remove", (dd, ww) -> {
-                                trustStore.remove(record.fingerprint);
+                                trustStore.remove(signerRecord.fingerprint);
                                 toast("Trust removed.");
                                 try { inspectPdf(); } catch (Exception e) { showStatus(safeMessage(e)); }
                             }).show();
@@ -380,7 +534,15 @@ public final class MainActivity extends Activity {
                     .setPositiveButton("OK", null).show();
             return;
         }
-        String[] labels = fingerprints.toArray(new String[0]);
+
+        String[] labels = new String[fingerprints.size()];
+        for (int i = 0; i < fingerprints.size(); i++) {
+            X509Certificate cert = trustStore.getCertificate(fingerprints.get(i));
+            String subject = cert == null ? "Invalid stored certificate"
+                    : cert.getSubjectX500Principal().getName();
+            labels[i] = subject + "\n" + fingerprints.get(i);
+        }
+
         new AlertDialog.Builder(this).setTitle("Trusted certificates · app only")
                 .setItems(labels, (dialog, which) -> {
                     String fp = fingerprints.get(which);
@@ -390,10 +552,22 @@ public final class MainActivity extends Activity {
                         toast("Invalid trust record removed.");
                         return;
                     }
-                    String message = "SHA-256: " + fp + "\n\nSubject: " +
-                            cert.getSubjectX500Principal().getName() + "\n\nIssuer: " +
-                            cert.getIssuerX500Principal().getName() +
-                            "\n\nRevocation is not checked by this build.";
+
+                    TrustedCertificateStore.TrustMetadata metadata = trustStore.getTrustMetadata(fp);
+                    String addedAt = metadata.trustedAtEpochMillis > 0
+                            ? DateFormat.getDateTimeInstance().format(new Date(metadata.trustedAtEpochMillis))
+                            : "Not recorded (legacy pin)";
+                    String message = "SHA-256: " + fp + "\n\n"
+                            + "Subject: " + cert.getSubjectX500Principal().getName() + "\n\n"
+                            + "Issuer: " + cert.getIssuerX500Principal().getName() + "\n\n"
+                            + "Serial (hex): " + cert.getSerialNumber().toString(16).toUpperCase(java.util.Locale.ROOT) + "\n\n"
+                            + "Certificate dates: " + DateFormat.getDateTimeInstance().format(cert.getNotBefore()) + " — "
+                            + DateFormat.getDateTimeInstance().format(cert.getNotAfter()) + "\n\n"
+                            + "Trust decision recorded: " + addedAt + "\n"
+                            + "Independent fingerprint confirmation: " + (metadata.fingerprintVerified ? "Recorded" : "Unknown")
+                            + "\nPolicy version: " + metadata.policyVersion
+                            + "\nPurpose: " + metadata.purpose
+                            + "\n\nRevocation status remains unknown; trust does not override certificate expiry or invalid signatures.";
                     new AlertDialog.Builder(this).setTitle("Trusted certificate")
                             .setMessage(message)
                             .setNegativeButton("Close", null)
