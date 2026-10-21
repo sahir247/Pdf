@@ -76,6 +76,7 @@ public final class MainActivity extends Activity {
         boolean cryptoValid;
         String fingerprint;
         CertificatePathValidator.Result pathResult;
+        PdfSignatureValidation.Report revisionReport;
     }
 
     @Override public void onCreate(Bundle state) {
@@ -135,7 +136,7 @@ public final class MainActivity extends Activity {
         addSpace(8);
         content.addView(manageCa);
 
-        TextView caveat = text("A green tick requires valid CMS cryptography, current certificate validity, full-file ByteRange coverage, and a certificate path to an Android system CA, the bundled fingerprint-pinned CCA India 2022 document-signing root, or a CA you explicitly imported into this app. A leaf-certificate pin alone is not a trusted issuer chain. Revocation, trusted timestamps, and complete PDF revision / DocMDP / FieldMDP analysis remain unimplemented. Saving exports the original PDF bytes unchanged.", 12, false, 0xFF6A4B12);
+        TextView caveat = text("This app performs layered PDF signature checks, but does not yet claim full validation. It checks CMS signature mathematics, certificate paths, ByteRange structure, parsing of the signed revision, and declared DocMDP/FieldMDP transform references. CRL/OCSP revocation, authenticated timestamp validation, complete incremental-revision comparison, DocMDP/FieldMDP enforcement, and comprehensive shadow-attack analysis remain incomplete; these gaps can affect trust decisions.", 12, false, 0xFF6A4B12);
         caveat.setPadding(dp(12), dp(12), dp(12), dp(12));
         caveat.setBackground(roundBg(0xFFFFF4D6, 0xFFFFE0A3));
         addSpace(16);
@@ -337,6 +338,7 @@ public final class MainActivity extends Activity {
                     record.signedRevisionEnd = (long) range[2] + (long) range[3];
                     record.coversCurrentFile = record.signedRevisionEnd == currentPdf.length;
                 }
+                record.revisionReport = PdfSignatureValidation.inspect(currentPdf, signature, range);
 
                 report.append("\n────────────────────────\n");
                 report.append("PDF signature ").append(index).append("\n");
@@ -349,6 +351,12 @@ public final class MainActivity extends Activity {
                 report.append("ByteRange / excluded Contents syntax: ")
                         .append(record.byteRangePlausible ? "STRUCTURALLY PLAUSIBLE" : "INVALID / SUSPICIOUS")
                         .append("\n");
+                report.append("Revision and permission checks:\n");
+                if (record.revisionReport != null) {
+                    report.append(record.revisionReport.toString());
+                } else {
+                    report.append("Revision validation unavailable.\n");
+                }
 
                 if (record.byteRangePlausible) {
                     if (record.coversCurrentFile) {
@@ -481,7 +489,10 @@ public final class MainActivity extends Activity {
                 records.add(record);
             }
 
-            boolean greenTick = isEligibleForGreenTick();
+            // Fail closed: a partial validator must never advertise a fully validated signature.
+            // Full green status stays disabled until revocation, authenticated timestamp, and
+            // semantic revision / DocMDP / FieldMDP enforcement are implemented and tested.
+            boolean greenTick = false;
             if (greenTick) {
                 report.append("\n✓ SIGNATURE CHECKS PASSED — CMS signature mathematics verified; certificate chains to a trusted local root; ")
                         .append("certificate valid at the current device time; ByteRange covers the current file.\n");
@@ -498,8 +509,9 @@ public final class MainActivity extends Activity {
                 report.append("\nOVERALL RESULT: REVIEW REQUIRED.\n");
                 report.append("A green tick requires valid CMS signature mathematics and a certificate path to a trusted local root, ")
                         .append("current certificate validity, structurally plausible ByteRange and coverage of the current file for every signature/signer.\n");
-                report.append("Revocation is unknown, trusted timestamps are not validated, and complete PDF revision / DocMDP / FieldMDP ")
-                        .append("analysis is not implemented. Exact pins do not override expiry, revocation, invalid cryptography, or document changes.");
+                report.append("FULL VALIDATION NOT ESTABLISHED: CRL/OCSP revocation, authenticated timestamp and historical-time validation, ")
+                        .append("complete incremental-revision change analysis, DocMDP/FieldMDP enforcement, and comprehensive shadow-attack checks ")
+                        .append("are incomplete. A valid CMS signature or trusted certificate path alone is not proof that the complete PDF is safe.");
                 status.setTextColor(0xFF263746);
                 status.setBackground(roundBg(0xFFFFFFFF, 0xFFD9E0E7));
             }
