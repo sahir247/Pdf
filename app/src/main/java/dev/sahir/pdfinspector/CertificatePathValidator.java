@@ -39,7 +39,7 @@ public final class CertificatePathValidator {
         public final Status status;
         public final String summary;
 
-        private Result(Status status, String summary) {
+        public Result(Status status, String summary) {
             this.status = status;
             this.summary = summary;
         }
