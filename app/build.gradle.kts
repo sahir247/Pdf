@@ -34,7 +34,11 @@ android {
 }
 
 dependencies {
-    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0") {
+        // pdfbox-android brings BC 1.72 transitively. Keep one BC family/version
+        // on the runtime classpath; the app uses the explicitly pinned 1.85 artifacts below.
+        exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
+    }
     implementation("org.bouncycastle:bcprov-jdk18on:1.85")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.85")
 }
