@@ -74,6 +74,7 @@ public final class MainActivity extends Activity {
         boolean coversCurrentFile;
         long signedRevisionEnd;
         String parseError;
+        PdfSignatureValidation.Report revisionReport;
         final List<SignerRecord> signers = new ArrayList<>();
     }
 
