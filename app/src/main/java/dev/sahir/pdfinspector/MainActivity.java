@@ -189,7 +189,12 @@ public final class MainActivity extends Activity {
                 try {
                     byte[] cmsBytes = signature.getContents(currentPdf);
                     byte[] signedContent = signature.getSignedContent(currentPdf);
-                    CMSSignedData cms = new CMSSignedData(new CMSProcessableByteArray(signedContent), cmsBytes);
+                    // PDF signature /Contents fields are padded to a reserved size. With BC 1.85,
+                    // parsing the padded byte[] directly can fail with "Extra data detected in stream".
+                    // The stream constructor is the PDFBox-recommended compatibility workaround.
+                    CMSSignedData cms = new CMSSignedData(
+                            new CMSProcessableByteArray(signedContent),
+                            new ByteArrayInputStream(cmsBytes));
                     SignerInformationStore signerStore = cms.getSignerInfos();
                     Collection<SignerInformation> signers = signerStore.getSigners();
                     if (signers.isEmpty()) throw new SecurityException("CMS contains no signers.");
