@@ -4,15 +4,44 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.util.Base64;
 
+import org.json.JSONObject;
+
 import java.security.MessageDigest;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
+/**
+ * App-private exact-certificate pin store. Pins are keyed by SHA-256(DER), never by subject,
+ * issuer, public key, or CA name. The separate audit record records the explicit confirmation.
+ */
 public final class TrustedCertificateStore {
     private static final String PREFS = "trusted_signer_certificates_v1";
+    private static final String AUDIT_PREFIX = "audit:";
+    private static final int POLICY_VERSION = 1;
     private final SharedPreferences preferences;
+
+    public static final class TrustMetadata {
+        public final long trustedAtEpochMillis;
+        public final boolean fingerprintVerified;
+        public final int policyVersion;
+        public final String purpose;
+        public final String userNote;
+        public final boolean legacyRecord;
+
+        private TrustMetadata(long trustedAtEpochMillis, boolean fingerprintVerified,
+                              int policyVersion, String purpose, String userNote,
+                              boolean legacyRecord) {
+            this.trustedAtEpochMillis = trustedAtEpochMillis;
+            this.fingerprintVerified = fingerprintVerified;
+            this.policyVersion = policyVersion;
+            this.purpose = purpose;
+            this.userNote = userNote;
+            this.legacyRecord = legacyRecord;
+        }
+    }
 
     public TrustedCertificateStore(Context context) {
         preferences = context.getApplicationContext()
@@ -41,23 +70,83 @@ public final class TrustedCertificateStore {
         }
     }
 
+    /**
+     * Kept for source compatibility. New trust operations should pass the explicit
+     * fingerprint-confirmation value to the overload below.
+     */
     public void trust(X509Certificate certificate) throws Exception {
+        trust(certificate, true, null);
+    }
+
+    public void trust(X509Certificate certificate, boolean fingerprintVerified,
+                      String userNote) throws Exception {
+        if (certificate == null) throw new IllegalArgumentException("Certificate is required.");
+        if (!fingerprintVerified) {
+            throw new SecurityException("The independent fingerprint confirmation is required.");
+        }
+
         String fp = fingerprint(certificate);
         String encoded = Base64.encodeToString(certificate.getEncoded(), Base64.NO_WRAP);
-        boolean saved = preferences.edit().putString(fp, encoded).commit();
+        JSONObject audit = new JSONObject();
+        audit.put("trustedAtEpochMillis", System.currentTimeMillis());
+        audit.put("fingerprintVerified", true);
+        audit.put("policyVersion", POLICY_VERSION);
+        audit.put("purpose", "PDF digital-signature signer");
+        if (userNote != null && !userNote.trim().isEmpty()) {
+            audit.put("userNote", userNote.trim());
+        }
+
+        boolean saved = preferences.edit()
+                .putString(fp, encoded)
+                .putString(AUDIT_PREFIX + fp, audit.toString())
+                .commit();
         if (!saved || !isTrusted(certificate)) {
             throw new IllegalStateException("Could not persist or verify the trust record.");
         }
     }
 
     public void remove(String fingerprint) {
-        preferences.edit().remove(fingerprint).commit();
+        preferences.edit()
+                .remove(fingerprint)
+                .remove(AUDIT_PREFIX + fingerprint)
+                .commit();
     }
 
     public List<String> listFingerprints() {
-        List<String> items = new ArrayList<>(preferences.getAll().keySet());
+        List<String> items = new ArrayList<>();
+        for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {
+            String key = entry.getKey();
+            if (key != null && !key.startsWith(AUDIT_PREFIX) && entry.getValue() instanceof String) {
+                items.add(key);
+            }
+        }
         Collections.sort(items);
         return items;
+    }
+
+    public TrustMetadata getTrustMetadata(String fingerprint) {
+        try {
+            String raw = preferences.getString(AUDIT_PREFIX + fingerprint, null);
+            if (raw == null) {
+                // Backward compatibility for pins saved by the previous version. That version
+                // only wrote a pin after the user checked the independent-fingerprint box, but
+                // it did not retain the date or a separate audit record.
+                return new TrustMetadata(0L, true, 0,
+                        "PDF digital-signature signer (legacy pin; date not recorded)",
+                        null, true);
+            }
+            JSONObject audit = new JSONObject(raw);
+            return new TrustMetadata(
+                    audit.optLong("trustedAtEpochMillis", 0L),
+                    audit.optBoolean("fingerprintVerified", false),
+                    audit.optInt("policyVersion", 0),
+                    audit.optString("purpose", "PDF digital-signature signer"),
+                    audit.has("userNote") ? audit.optString("userNote", null) : null,
+                    false);
+        } catch (Exception e) {
+            return new TrustMetadata(0L, false, 0,
+                    "Trust record metadata could not be read", null, true);
+        }
     }
 
     public X509Certificate getCertificate(String fingerprint) {
