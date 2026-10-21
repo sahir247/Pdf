@@ -27,7 +27,9 @@ android {
                 "META-INF/LICENSE.txt",
                 "META-INF/NOTICE",
                 "META-INF/NOTICE.txt",
-                "META-INF/INDEX.LIST"
+                "META-INF/INDEX.LIST",
+                // BouncyCastle 1.85 jars all carry this same multi-release OSGi manifest.
+                "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
             )
         }
     }
