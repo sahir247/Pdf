@@ -173,8 +173,8 @@ public final class MainActivity extends Activity {
             currentPdfPassword = "";
             records.clear();
             actions.removeAllViews();
-            showStatus("Could not inspect PDF\\n" + safeMessage(e) +
-                    "\\n\\nThe file may be malformed, too large, or unsupported.");
+            showStatus("Could not inspect PDF\n" + safeMessage(e) +
+                    "\n\nThe file may be malformed, too large, or unsupported.");
         }
     }
 
