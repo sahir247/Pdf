@@ -77,13 +77,20 @@ public final class PdfSigningService {
             throw new SecurityException("The PKCS#12 file contains no usable private-key signing identity.");
         }
         signerCertificate.checkValidity();
+        boolean[] keyUsage = signerCertificate.getKeyUsage();
+        if (keyUsage != null && !((keyUsage.length > 0 && keyUsage[0])
+                || (keyUsage.length > 1 && keyUsage[1]))) {
+            throw new SecurityException("The certificate key usage does not permit digital signatures.");
+        }
         if (chain == null || chain.length == 0) chain = new Certificate[]{signerCertificate};
 
         List<X509Certificate> certificateChain = new ArrayList<>();
         for (Certificate certificate : chain) {
             if (certificate instanceof X509Certificate) certificateChain.add((X509Certificate) certificate);
         }
-        if (certificateChain.isEmpty()) certificateChain.add(signerCertificate);
+        // PKCS#12 chains should begin with the leaf, but normalize the order rather than relying on it.
+        certificateChain.remove(signerCertificate);
+        certificateChain.add(0, signerCertificate);
 
         File inputFile = File.createTempFile("pdf-sign-input-", ".pdf", context.getCacheDir());
         File outputFile = File.createTempFile("pdf-sign-output-", ".pdf", context.getCacheDir());
