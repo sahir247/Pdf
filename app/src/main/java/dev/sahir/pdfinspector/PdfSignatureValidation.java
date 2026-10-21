@@ -172,10 +172,34 @@ public final class PdfSignatureValidation {
                 if (!(paramsBase instanceof COSDictionary)) { malformed = true; continue; }
                 COSBase pBase = dereference(((COSDictionary) paramsBase).getDictionaryObject(COSName.getPDFName("P")));
                 if (!(pBase instanceof com.tom_roush.pdfbox.cos.COSNumber)) { malformed = true; continue; }
-                int permission = ((com.tom_roush.pdfbox.cos.COSNumber) pBase).intValue();
-                if (permission < 1 || permission > 3) malformed = true;
+                com.tom_roush.pdfbox.cos.COSNumber permissionNumber =
+                        (com.tom_roush.pdfbox.cos.COSNumber) pBase;
+                int permission = permissionNumber.intValue();
+                if (permissionNumber.floatValue() != permission || permission < 1 || permission > 3) malformed = true;
             } else if ("FieldMDP".equals(method)) {
                 sawFieldMdp = true;
+                COSBase paramsBase = dereference(reference.getDictionaryObject(COSName.getPDFName("TransformParams")));
+                if (!(paramsBase instanceof COSDictionary)) { malformed = true; continue; }
+                COSDictionary params = (COSDictionary) paramsBase;
+                COSBase actionBase = dereference(params.getDictionaryObject(COSName.getPDFName("Action")));
+                if (!(actionBase instanceof COSName)) { malformed = true; continue; }
+                String action = ((COSName) actionBase).getName();
+                if (!("All".equals(action) || "Include".equals(action) || "Exclude".equals(action))) {
+                    malformed = true;
+                    continue;
+                }
+                if (!"All".equals(action)) {
+                    COSBase fieldsBase = dereference(params.getDictionaryObject(COSName.getPDFName("Fields")));
+                    if (!(fieldsBase instanceof COSArray)) { malformed = true; continue; }
+                    COSArray fields = (COSArray) fieldsBase;
+                    for (int fieldIndex = 0; fieldIndex < fields.size(); fieldIndex++) {
+                        COSBase field = dereference(fields.get(fieldIndex));
+                        if (!(field instanceof com.tom_roush.pdfbox.cos.COSString)) {
+                            malformed = true;
+                            break;
+                        }
+                    }
+                }
             }
         }
         if (malformed) {
