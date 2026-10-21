@@ -165,6 +165,12 @@ public final class TrustedCertificateStore {
         return certificates;
     }
 
+    public void removeTrustedCertificateAuthority(String fingerprint) {
+        if (fingerprint == null || fingerprint.trim().isEmpty()) return;
+        preferences.edit().remove(CA_PREFIX + fingerprint).commit();
+    }
+
+
     public List<String> listFingerprints() {
         List<String> items = new ArrayList<>();
         for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {
