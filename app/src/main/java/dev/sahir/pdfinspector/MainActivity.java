@@ -182,7 +182,7 @@ public final class MainActivity extends Activity {
                 fingerprints[i] = "";
             }
             labels[i] = certificate.getSubjectX500Principal().getName()
-                    + "\\nSHA-256: " + fingerprints[i];
+                    + "\nSHA-256: " + fingerprints[i];
         }
         new AlertDialog.Builder(this).setTitle("App trusted CA anchors")
                 .setItems(labels, (dialog, which) -> {
