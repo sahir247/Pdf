@@ -6,6 +6,7 @@ import com.tom_roush.pdfbox.cos.COSDictionary;
 import com.tom_roush.pdfbox.cos.COSName;
 import com.tom_roush.pdfbox.cos.COSObject;
 import com.tom_roush.pdfbox.pdmodel.PDDocument;
+import com.tom_roush.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import com.tom_roush.pdfbox.pdmodel.interactive.digitalsignature.PDSignature;
 
 import java.io.ByteArrayInputStream;
@@ -61,6 +62,10 @@ public final class PdfSignatureValidation {
     private PdfSignatureValidation() { }
 
     public static Report inspect(byte[] pdf, PDSignature signature, int[] byteRange) {
+        return inspect(pdf, signature, byteRange, null);
+    }
+
+    public static Report inspect(byte[] pdf, PDSignature signature, int[] byteRange, String password) {
         List<Check> checks = new ArrayList<>();
         if (pdf == null || signature == null || byteRange == null || byteRange.length != 4) {
             checks.add(new Check("PDF revision structure", State.FAIL, "PDF, signature, or four-element ByteRange is missing."));
@@ -112,7 +117,9 @@ public final class PdfSignatureValidation {
         } else {
             byte[] revision = new byte[(int) end];
             System.arraycopy(pdf, 0, revision, 0, revision.length);
-            try (PDDocument signedDocument = PDDocument.load(new ByteArrayInputStream(revision))) {
+            try (PDDocument signedDocument = (password != null && !password.isEmpty())
+                    ? PDDocument.load(new ByteArrayInputStream(revision), password)
+                    : PDDocument.load(new ByteArrayInputStream(revision))) {
                 List<PDSignature> signatures = signedDocument.getSignatureDictionaries();
                 boolean matchingSignature = false;
                 if (signatures != null) {
@@ -136,6 +143,9 @@ public final class PdfSignatureValidation {
                         matchingSignature
                                 ? "The signed-revision prefix contains this exact signature ByteRange and Contents value."
                                 : "The signed-revision prefix parsed, but this exact signature dictionary was not matched."));
+            } catch (InvalidPasswordException e) {
+                checks.add(new Check("Signed-revision parse", State.REVIEW_REQUIRED,
+                        "The signed revision is password-protected and requires document authentication."));
             } catch (Exception e) {
                 checks.add(new Check("Signed-revision parse", State.FAIL,
                         "The PDF parser could not load the exact signed revision (" + e.getClass().getSimpleName() + ")."));

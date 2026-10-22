@@ -21,6 +21,7 @@ import android.print.PrintManager;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.text.InputType;
+import android.view.inputmethod.EditorInfo;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -725,7 +726,7 @@ public final class MainActivity extends AppCompatActivity {
                         record.signedRevisionEnd = (long) range[2] + (long) range[3];
                         record.coversCurrentFile = record.signedRevisionEnd == currentPdf.length;
                     }
-                    record.revisionReport = PdfSignatureValidation.inspect(currentPdf, signature, range);
+                    record.revisionReport = PdfSignatureValidation.inspect(currentPdf, signature, range, currentPdfPassword);
 
                     if (!record.byteRangePlausible) {
                         records.add(record);
@@ -1122,15 +1123,33 @@ public final class MainActivity extends AppCompatActivity {
         addSpaceIn(panel, 10);
         panel.addView(passwordInput);
 
+        passwordInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
+
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(previousAttemptFailed ? "Incorrect Password" : "Password Protected PDF")
                 .setView(panel)
+                .setCancelable(false)
                 .setNegativeButton("Cancel", (d, which) -> {
-                    currentPdfPassword = "";
+                    currentPdfPassword = null;
+                    currentPdf = null;
+                    records.clear();
+                    renderedPagePreview = null;
                     renderDocumentView();
                 })
                 .setPositiveButton("Unlock", null)
                 .create();
+
+        passwordInput.setOnEditorActionListener((v, actionId, event) -> {
+            String input = passwordInput.getText().toString();
+            if (TextUtils.isEmpty(input)) {
+                passwordInput.setError("Password required");
+                return true;
+            }
+            currentPdfPassword = input;
+            dialog.dismiss();
+            inspectPdf();
+            return true;
+        });
 
         dialog.setOnShowListener(d -> {
             Button unlockBtn = dialog.getButton(AlertDialog.BUTTON_POSITIVE);

@@ -213,4 +213,63 @@ public class SignatureIntegrityTest {
             System.out.println("Saved ration_app_rectified.pdf (" + res.rectifiedPdf.length + " bytes)");
         }
     }
+
+            @Test
+    public void testAadhaarSignatureVerificationAndIntegrity() throws Exception {
+        File aadhaarFile = new File("C:/Users/parve/Downloads/PrivacyVideoCleaner_v1_source/scratch/eaadhaar.pdf");
+        if (!aadhaarFile.exists()) {
+            aadhaarFile = new File("C:/Users/parve/Downloads/PrivacyVideoCleaner_v1_source/scratch/aadhaar.pdf");
+        }
+        if (!aadhaarFile.exists()) return;
+
+        byte[] pdfBytes = java.nio.file.Files.readAllBytes(aadhaarFile.toPath());
+        try (PDDocument doc = PDDocument.load(new java.io.ByteArrayInputStream(pdfBytes), "KHON2004")) {
+            List<PDSignature> signatures = doc.getSignatureDictionaries();
+            Assert.assertNotNull("Aadhaar signatures must exist", signatures);
+            Assert.assertEquals(1, signatures.size());
+
+            PDSignature sig = signatures.get(0);
+            int[] range = sig.getByteRange();
+
+            // 1. ByteRange Plausibility
+            Assert.assertTrue("ByteRange must be plausible", range != null && range.length == 4);
+            Assert.assertEquals(0, range[0]);
+            Assert.assertTrue(range[1] > 0);
+            Assert.assertTrue(range[2] > range[1]);
+            Assert.assertTrue(range[3] > 0);
+            Assert.assertEquals("ByteRange must cover exactly the entire file", pdfBytes.length, range[2] + range[3]);
+
+            // 2. Revision Report with password must NOT have failed checks
+            PdfSignatureValidation.Report report = PdfSignatureValidation.inspect(pdfBytes, sig, range, "KHON2004");
+            Assert.assertFalse("Aadhaar must NOT have failed checks when inspected with password", report.hasFailedChecks());
+
+            // 3. Cryptographic math verification
+            byte[] cmsBytes = sig.getContents(pdfBytes);
+            byte[] signedContent = sig.getSignedContent(pdfBytes);
+            org.bouncycastle.cms.CMSSignedData cms = new org.bouncycastle.cms.CMSSignedData(
+                    new org.bouncycastle.cms.CMSProcessableByteArray(signedContent),
+                    new java.io.ByteArrayInputStream(cmsBytes));
+            org.bouncycastle.cert.jcajce.JcaX509CertificateConverter converter =
+                    new org.bouncycastle.cert.jcajce.JcaX509CertificateConverter().setProvider("BC");
+
+            boolean mathVerified = false;
+            for (org.bouncycastle.cms.SignerInformation cmsSigner : cms.getSignerInfos().getSigners()) {
+                for (Object hObj : cms.getCertificates().getMatches(cmsSigner.getSID())) {
+                    org.bouncycastle.cert.X509CertificateHolder holder = (org.bouncycastle.cert.X509CertificateHolder) hObj;
+                    java.security.cert.X509Certificate cert = converter.getCertificate(holder);
+                    boolean verified = cmsSigner.verify(
+                            new org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder().setProvider("BC").build(cert));
+                    if (verified) {
+                        mathVerified = true;
+                        break;
+                    }
+                }
+            }
+            Assert.assertTrue("Aadhaar CMS signature must be cryptographically valid", mathVerified);
+
+            // 4. Test without password: must NOT be marked as FAIL (tampered), but as REVIEW_REQUIRED
+            PdfSignatureValidation.Report unauthedReport = PdfSignatureValidation.inspect(pdfBytes, sig, range, null);
+            Assert.assertFalse("Encrypted document without password must NOT be treated as tampered", unauthedReport.hasFailedChecks());
+        }
+    }
 }
