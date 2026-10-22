@@ -301,26 +301,24 @@ public final class PdfStamperEngine {
         }
 
         // Standard / Banner stamps (e.g. Income Certificate 120x60 pt):
-        // Apex sits high at Y=30.52 (never touching 'Location: E-Dist 2.0')
-        // Right tip terminates cleanly inside 'a' of 'valid'
+        // Canonical Adobe Acrobat DigSig.api stream reverse-engineered from Adobe binary:
+        // Apex rests above 'Reason: D-Sign' and never touches 'Dist' / Line 5.
+        // Right tail terminates cleanly inside 'a' and 'l' of 'valid'.
         form.setBBox(new PDRectangle(0, 0, width, height));
-
-        float scale = Math.min(width / 100f, height / 100f);
-        if (scale <= 0) scale = 1.0f;
 
         StringBuilder sb = new StringBuilder();
         sb.append("q\n");
-        sb.append(String.format(Locale.US, "%.4f 0 0 %.4f 0 0 cm\n", scale, scale));
+        sb.append("0.1 0 0 0.1 0 0 cm\n");
         sb.append("1 J 1 j 4 M [] 0 d\n");
-        // Layer 1: Black 3D drop shadow
+        // Layer 1: White border outline for separation from underlying text (2.4pt)
+        sb.append("1 1 1 rg 1 1 1 RG 24 w\n");
+        sb.append("370 37 m 0 401 l 126 574 l 365 289 l 779 1000 l 944 876 l h b\n");
+        // Layer 2: Black 3D drop shadow extruded down-right
         sb.append("0 G\n");
-        sb.append("28.24 28.72 m 3.96 51.39 l 11.46 60.89 l 25.34 43.22 l 56.81 89.68 l 67.31 81.68 l h f\n");
-        // Layer 2: Vibrant Adobe Green fill
+        sb.append("406 0 m 55 349 l 157 485 l 396 200 l 817 916 l 963 808 l h f\n");
+        // Layer 3: Vibrant Adobe Green fill
         sb.append("0 0.7 0.23 rg\n");
-        sb.append("26.74 30.52 m 2.46 53.19 l 9.96 62.69 l 26.04 45.02 l 55.31 91.48 l 65.81 83.48 l h f\n");
-        // Layer 3: Crisp black outer outline border stroke (1.2 w)
-        sb.append("0 G 1.2 w\n");
-        sb.append("26.74 30.52 m 2.46 53.19 l 9.96 62.69 l 26.04 45.02 l 55.31 91.48 l 65.81 83.48 l h S\n");
+        sb.append("377 50 m 25 399 l 128 536 l 367 251 l 787 967 l 934 859 l h f\n");
         sb.append("Q\n");
 
         try (OutputStream out = form.getCOSObject().createOutputStream()) {
