@@ -248,7 +248,7 @@ public final class PdfStamperEngine {
                             }
                             float baseline = isCompact ? (n4BBox.getLowerLeftY() + 2.3f) : (n4BBox.getLowerLeftY() + h * 0.28f);
                             float tx = isCompact ? 2.0f : 0.72f;
-                            float fontSize = isCompact ? 7.8f : Math.min(12.0f, Math.max(7.8f, h * 0.78f));
+                            float fontSize = isCompact ? 8.25f : Math.min(11.72f, Math.max(8.25f, h * 0.78f));
 
                             String newN4Stream = String.format(java.util.Locale.US,
                                     "BT\n1 0 0 1 %.2f %.2f Tm\n/F1 %.2f Tf\n(Signature valid)Tj\nET\n",
@@ -272,7 +272,8 @@ public final class PdfStamperEngine {
                             COSDictionary helveticaDict = new COSDictionary();
                             helveticaDict.setItem(COSName.TYPE, COSName.FONT);
                             helveticaDict.setItem(COSName.SUBTYPE, COSName.TYPE1);
-                            helveticaDict.setItem(COSName.BASE_FONT, COSName.getPDFName("Helvetica-Bold"));
+                            helveticaDict.setItem(COSName.BASE_FONT, COSName.getPDFName("Helvetica"));
+                            helveticaDict.setItem(COSName.ENCODING, COSName.WIN_ANSI_ENCODING);
                             fontsDict.setItem(COSName.getPDFName("F1"), helveticaDict);
 
                             changed = true;
