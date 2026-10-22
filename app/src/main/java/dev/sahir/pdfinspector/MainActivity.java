@@ -27,8 +27,8 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -77,12 +77,7 @@ import java.util.Locale;
 
 public final class MainActivity extends AppCompatActivity {
     private static final int PICK_PDF = 1001;
-    private static final int SAVE_PDF_COPY = 1002;
-    private static final int PICK_TRUSTED_CA = 1003;
     private static final long MAX_PDF_BYTES = 50L * 1024L * 1024L;
-
-    private byte[] pendingSaveBytes;
-    private String pendingSaveName = "pdf-copy.pdf";
 
     private LinearLayout contentContainer;
     private TrustedCertificateStore trustStore;
@@ -91,6 +86,7 @@ public final class MainActivity extends AppCompatActivity {
     private String currentPdfPassword = "";
     private Bitmap renderedPagePreview;
     private final List<SignatureRecord> records = new ArrayList<>();
+    private boolean promptedForCurrentDoc = false;
 
     private static final class SignatureRecord {
         PDSignature signature;
@@ -130,6 +126,15 @@ public final class MainActivity extends AppCompatActivity {
         handleIncomingIntent(intent);
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (currentPdf != null) {
+            // Re-inspect to reflect any changes made in TrustManagementActivity
+            inspectPdf();
+        }
+    }
+
     private void handleIncomingIntent(Intent intent) {
         if (intent == null) return;
         String action = intent.getAction();
@@ -137,12 +142,14 @@ public final class MainActivity extends AppCompatActivity {
             Uri uri = intent.getData();
             if (uri != null) {
                 String pass = intent.getStringExtra("password");
-            if (pass != null) currentPdfPassword = pass;
-            loadPdfFromUri(uri);
+                if (pass != null) currentPdfPassword = pass;
+                promptedForCurrentDoc = false;
+                loadPdfFromUri(uri);
             }
         } else if (Intent.ACTION_SEND.equals(action)) {
             Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
             if (uri != null) {
+                promptedForCurrentDoc = false;
                 loadPdfFromUri(uri);
             }
         }
@@ -165,22 +172,47 @@ public final class MainActivity extends AppCompatActivity {
     private void renderDocumentView() {
         contentContainer.removeAllViews();
 
-        // Header Card
+        // 1. Header Card with Title and Upper-Right Certificate Icon
         LinearLayout headerCard = createCard();
         headerCard.setBackground(roundBg(0xFF0D47A1, 0, dp(14)));
-        headerCard.setPadding(dp(20), dp(20), dp(20), dp(20));
+        headerCard.setPadding(dp(18), dp(16), dp(18), dp(16));
 
-        TextView appTitle = text("PDF Validate", 24, true, 0xFFFFFFFF);
-        headerCard.addView(appTitle);
+        LinearLayout headerRow = new LinearLayout(this);
+        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView tagLine = text("Native Android • Adobe Acrobat Parity Signature Engine", 13, false, 0xFFB0BEC5);
-        addSpaceIn(headerCard, 4);
-        headerCard.addView(tagLine);
+        LinearLayout titleCol = new LinearLayout(this);
+        titleCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
+        titleCol.setLayoutParams(titleParams);
 
+        TextView appTitle = text("PDF Validate", 22, true, 0xFFFFFFFF);
+        titleCol.addView(appTitle);
+
+        TextView tagLine = text("Native Android • Adobe Acrobat Parity Engine", 12, false, 0xFFB0BEC5);
+        addSpaceIn(titleCol, 2);
+        titleCol.addView(tagLine);
+
+        headerRow.addView(titleCol);
+
+        // Certificate & Trust Store management icon button on upper right
+        ImageButton certBtn = new ImageButton(this);
+        certBtn.setImageResource(R.drawable.ic_certificate);
+        certBtn.setBackground(roundBg(0x22FFFFFF, 0x44FFFFFF, dp(10)));
+        certBtn.setColorFilter(Color.WHITE);
+        certBtn.setPadding(dp(10), dp(10), dp(10), dp(10));
+        certBtn.setContentDescription("Certificate & Trust Management");
+        certBtn.setOnClickListener(v -> {
+            Intent intent = new Intent(this, TrustManagementActivity.class);
+            startActivity(intent);
+        });
+        headerRow.addView(certBtn);
+
+        headerCard.addView(headerRow);
         addSpaceIn(contentContainer, 12);
         contentContainer.addView(headerCard);
 
-        // Document Selection / Actions
+        // 2. Document Selection / Action
         LinearLayout pickerCard = createCard();
         pickerCard.setPadding(dp(16), dp(16), dp(16), dp(16));
 
@@ -217,7 +249,7 @@ public final class MainActivity extends AppCompatActivity {
             // Document Status Banner Card
             renderStatusBanner();
 
-            // Quick Actions Card
+            // 2-Option Export Actions (Save and Print)
             if (!records.isEmpty()) {
                 renderQuickActions();
             }
@@ -230,9 +262,6 @@ public final class MainActivity extends AppCompatActivity {
             // Signatures Breakdown
             renderSignaturesBreakdown();
         }
-
-        // Trust Store & Settings Section
-        renderTrustSettingsCard();
     }
 
     private void renderStatusBanner() {
@@ -248,47 +277,21 @@ public final class MainActivity extends AppCompatActivity {
             statusBgColor = 0xFFECEFF1;
             statusTitle = "ℹ️ NO DIGITAL SIGNATURE DETECTED";
             statusSubtitle = "This document does not contain embedded cryptographic signature dictionaries. Visual stamps are not digital signatures.";
+        } else if (isDocumentTampered()) {
+            overallStatusColor = 0xFFC62828;
+            statusBgColor = 0xFFFFEBEE;
+            statusTitle = "❌ SIGNATURE TAMPERED / INVALID";
+            statusSubtitle = "Document failed cryptographic mathematical verification or byte ranges were modified after signing. Stamping or exporting tampered documents is strictly blocked.";
+        } else if (isDocumentCryptographicallyValid()) {
+            overallStatusColor = 0xFF2E7D32;
+            statusBgColor = 0xFFE8F5E9;
+            statusTitle = "✓ SIGNATURE VERIFIED (TRUSTED)";
+            statusSubtitle = "CMS digital signature verified and chains to a trusted root authority (CCA India PKI / System CA / Pinned Signer).";
         } else {
-            boolean allCryptoValid = true;
-            boolean allTrusted = true;
-            boolean anyTampered = false;
-
-            for (SignatureRecord rec : records) {
-                if (!rec.byteRangePlausible || rec.parseError != null) {
-                    anyTampered = true;
-                    break;
-                }
-                for (SignerRecord signer : rec.signers) {
-                    if (!signer.cryptoValid) {
-                        allCryptoValid = false;
-                        anyTampered = true;
-                    }
-                    boolean isPinned = signer.certificate != null && trustStore.isTrusted(signer.certificate);
-                    boolean isPathTrusted = signer.pathResult != null &&
-                            (signer.pathResult.status == CertificatePathValidator.Status.TRUSTED_SYSTEM_PATH
-                                    || signer.pathResult.status == CertificatePathValidator.Status.TRUSTED_APP_PATH);
-                    if (!isPathTrusted && !isPinned) {
-                        allTrusted = false;
-                    }
-                }
-            }
-
-            if (anyTampered || !allCryptoValid) {
-                overallStatusColor = 0xFFC62828;
-                statusBgColor = 0xFFFFEBEE;
-                statusTitle = "❌ SIGNATURE TAMPERED / INVALID";
-                statusSubtitle = "One or more signatures failed cryptographic mathematical verification or contains malformed byte ranges.";
-            } else if (allTrusted) {
-                overallStatusColor = 0xFF2E7D32;
-                statusBgColor = 0xFFE8F5E9;
-                statusTitle = "✓ SIGNATURE VERIFIED (TRUSTED)";
-                statusSubtitle = "CMS signature mathematics verified and chains to a trusted root authority (CCA India 2022 / System CA).";
-            } else {
-                overallStatusColor = 0xFFE65100;
-                statusBgColor = 0xFFFFF3E0;
-                statusTitle = "⚠️ SIGNATURE VALID (UNTRUSTED ROOT)";
-                statusSubtitle = "CMS signature mathematics is valid, but the certificate does not chain to a pre-trusted root. Review or trust the signer below.";
-            }
+            overallStatusColor = 0xFFE65100;
+            statusBgColor = 0xFFFFF3E0;
+            statusTitle = "⚠️ SIGNATURE VALID (UNTRUSTED ROOT)";
+            statusSubtitle = "Signature mathematics is valid, but the certificate does not chain to a pre-trusted root authority. Tap the certificate icon in the top right or add to trusted.";
         }
 
         statusCard.setBackground(roundBg(statusBgColor, overallStatusColor, dp(12)));
@@ -298,22 +301,8 @@ public final class MainActivity extends AppCompatActivity {
         statusCard.addView(titleView);
         addSpaceIn(statusCard, 6);
 
-        TextView subtitleView = text(statusSubtitle, 13, false, 0xFF37474F);
-        statusCard.addView(subtitleView);
-        addSpaceIn(statusCard, 12);
-
-        // Document Details
-        View divider = new View(this);
-        divider.setBackgroundColor(0x33000000);
-        statusCard.addView(divider, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)));
-        addSpaceIn(statusCard, 10);
-
-        TextView docName = text("📄 File: " + currentPdfName, 13, true, 0xFF263238);
-        statusCard.addView(docName);
-        addSpaceIn(statusCard, 4);
-
-        TextView docMeta = text("Size: " + formatFileSize(currentPdf.length) + "  •  Signatures: " + records.size(), 12, false, 0xFF607D8B);
-        statusCard.addView(docMeta);
+        TextView subView = text(statusSubtitle, 13, false, 0xFF37474F);
+        statusCard.addView(subView);
 
         addSpaceIn(contentContainer, 12);
         contentContainer.addView(statusCard);
@@ -343,14 +332,11 @@ public final class MainActivity extends AppCompatActivity {
         previewView.setPadding(dp(4), dp(4), dp(4), dp(4));
         previewView.setOnClickListener(v -> showFullPreviewDialog(renderedPagePreview));
 
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        previewCard.addView(previewView, lp);
-        addSpaceIn(previewCard, 8);
+        previewCard.addView(previewView);
 
-        TextView tapHint = text("🔍 Tap document preview to view full screen", 11, false, 0xFF78909C);
-        tapHint.setGravity(Gravity.CENTER);
-        previewCard.addView(tapHint);
+        TextView hint = text("Tap preview to inspect full-screen with high-resolution Adobe checkmark", 11, false, 0xFF78909C);
+        hint.setPadding(0, dp(6), 0, 0);
+        previewCard.addView(hint);
 
         addSpaceIn(contentContainer, 12);
         contentContainer.addView(previewCard);
@@ -360,100 +346,125 @@ public final class MainActivity extends AppCompatActivity {
         if (bitmap == null) return;
         ImageView fullView = new ImageView(this);
         fullView.setAdjustViewBounds(true);
-        fullView.setScaleType(ImageView.ScaleType.FIT_CENTER);
         fullView.setImageBitmap(bitmap);
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.addView(fullView);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(fullView);
 
         new AlertDialog.Builder(this)
-                .setTitle("Document Viewport (Verified)")
-                .setView(scroll)
+                .setTitle("Document Viewport Preview")
+                .setView(sv)
                 .setPositiveButton("Close", null)
                 .show();
     }
 
+    /**
+     * Streamlined 2-Option Actions: Save PDF and Print.
+     * Both options strip signature dictionaries and AcroForms, preserving pristine visual output
+     * so that downstream viewers (such as Adobe Acrobat DC) never show integrity errors.
+     * Exporting or signing tampered documents is strictly prohibited.
+     */
     private void renderQuickActions() {
         LinearLayout actionsCard = createCard();
         actionsCard.setPadding(dp(18), dp(18), dp(18), dp(18));
 
-        TextView secTitle = text("SIGNATURE ACTIONS", 12, true, 0xFF78909C);
+        TextView secTitle = text("EXPORT & PRINT ACTIONS", 12, true, 0xFF78909C);
         actionsCard.addView(secTitle);
         addSpaceIn(actionsCard, 12);
 
-        // Action 1: Print with Verified Tick (Primary Adobe Mechanism: 100% Non-destructive)
-        Button printBtn = styledButton("🖨️ Print Document (with Verified Tick)", 0xFF0D47A1, 0xFFFFFFFF);
-        printBtn.setOnClickListener(v -> printDocumentWithVerifiedTick());
+        if (isDocumentTampered()) {
+            TextView warn = text("⚠️ Document has been modified or tampered with after signing. Export and printing are blocked to protect document integrity.", 13, true, 0xFFC62828);
+            actionsCard.addView(warn);
+            addSpaceIn(contentContainer, 12);
+            contentContainer.addView(actionsCard);
+            return;
+        }
+
+        // Option 1: Save Verified PDF (Visual Only)
+        Button saveBtn = styledButton("💾 Save PDF (Visual Only)", 0xFF2E7D32, 0xFFFFFFFF);
+        saveBtn.setOnClickListener(v -> exportVisualSavePdf());
+        actionsCard.addView(saveBtn);
+
+        TextView saveDesc = text("Preserves visual layout & verified checkmark. Strips signature data so Adobe Acrobat and all viewers open without integrity errors.", 12, false, 0xFF546E7A);
+        saveDesc.setPadding(dp(4), dp(4), dp(4), 0);
+        actionsCard.addView(saveDesc);
+        addSpaceIn(actionsCard, 14);
+
+        // Option 2: Print Document
+        Button printBtn = styledButton("🖨️ Print Document", 0xFF1565C0, 0xFFFFFFFF);
+        printBtn.setOnClickListener(v -> printVisualDocument());
         actionsCard.addView(printBtn);
 
-        TextView printDesc = text("Exact Adobe Acrobat architecture: spools pages with dynamic verified checkmark overlay for physical printing or 'Save as PDF'. Original file bytes are 100% preserved.", 12, false, 0xFF546E7A);
+        TextView printDesc = text("Spools high-resolution visual pages with verified checkmark directly to Android Print / Save as PDF.", 12, false, 0xFF546E7A);
         printDesc.setPadding(dp(4), dp(4), dp(4), 0);
         actionsCard.addView(printDesc);
-        addSpaceIn(actionsCard, 14);
-
-        // Action 2: Save Original Signed PDF (Preserve Integrity)
-        Button saveOrigBtn = styledButton("💾 Save Original Signed PDF (Preserve Integrity)", 0xFF2E7D32, 0xFFFFFFFF);
-        saveOrigBtn.setOnClickListener(v -> saveOriginalPdfCopy());
-        actionsCard.addView(saveOrigBtn);
-
-        TextView saveOrigDesc = text("Preserves 100% byte-for-byte original signed document, intact digital signatures, and legal non-repudiation.", 12, false, 0xFF546E7A);
-        saveOrigDesc.setPadding(dp(4), dp(4), dp(4), 0);
-        actionsCard.addView(saveOrigDesc);
-        addSpaceIn(actionsCard, 14);
-
-        // Action 3: Fix Visual Appearance (Rendered Copy for Paper Printing)
-        Button fixBtn = styledButton("✓ Fix Visual Signature (Print Replica)", 0xFF1565C0, 0xFFFFFFFF);
-        fixBtn.setOnClickListener(v -> fixSignatureAppearance());
-        actionsCard.addView(fixBtn);
-
-        TextView fixDesc = text("Gated by cryptographic validation. Stamps Adobe green checkmark for paper printing and basic viewers. (Alters bytes).", 12, false, 0xFF546E7A);
-        fixDesc.setPadding(dp(4), dp(4), dp(4), 0);
-        actionsCard.addView(fixDesc);
-        addSpaceIn(actionsCard, 14);
-
-        // Action 4: Export Flattened Printable PDF
-        Button flattenBtn = styledButton("📄 Export Flattened PDF (Legacy Printers)", 0xFF0277BD, 0xFFFFFFFF);
-        flattenBtn.setOnClickListener(v -> exportFlattenedPrintablePdf());
-        actionsCard.addView(flattenBtn);
-
-        TextView flattenDesc = text("Gated by cryptographic validation. Permanently burns checkmark and strips AcroForm for legacy physical printers.", 12, false, 0xFF546E7A);
-        flattenDesc.setPadding(dp(4), dp(4), dp(4), 0);
-        actionsCard.addView(flattenDesc);
-        addSpaceIn(actionsCard, 14);
-
-        // Action 5: Share Document
-        Button shareBtn = styledButton("📤 Share Original Document", 0xFF37474F, 0xFFFFFFFF);
-        shareBtn.setOnClickListener(v -> sharePdfBytes(currentPdf, currentPdfName));
-        actionsCard.addView(shareBtn);
 
         addSpaceIn(contentContainer, 12);
         contentContainer.addView(actionsCard);
     }
 
-    private void printDocumentWithVerifiedTick() {
+    private void exportVisualSavePdf() {
         if (currentPdf == null) {
             toast("Please select a PDF first.");
             return;
         }
-        if (records.isEmpty()) {
-            toast("No digital signatures found in this document.");
+        if (isDocumentTampered()) {
+            showStatusDialog("Export Blocked", "❌ This document has been modified, tampered with, or corrupted after signing. Stamping or exporting tampered documents is strictly prohibited.");
             return;
         }
+        if (!isDocumentCryptographicallyValid()) {
+            showStatusDialog("Export Blocked", "Cryptographic validation failed or certificate is untrusted.\n\nPlease verify or trust the certificate before exporting.");
+            return;
+        }
+
+        try {
+            PdfStamperEngine.StampResult result = PdfStamperEngine.processPdf(currentPdf, currentPdfPassword);
+            byte[] visualPdf = result.printablePdf;
+            String baseName = getBaseName();
+            String outputName = baseName + "-verified.pdf";
+            saveBytesToDownloads(visualPdf, outputName);
+        } catch (Exception e) {
+            toast("Failed to export verified PDF: " + safeMessage(e));
+        }
+    }
+
+    private void printVisualDocument() {
+        if (currentPdf == null) {
+            toast("Please select a PDF first.");
+            return;
+        }
+        if (isDocumentTampered()) {
+            showStatusDialog("Print Blocked", "❌ This document has been modified, tampered with, or corrupted after signing. Printing tampered documents with verified status is strictly prohibited.");
+            return;
+        }
+        if (!isDocumentCryptographicallyValid()) {
+            showStatusDialog("Print Blocked", "Cryptographic validation failed or certificate is untrusted.\n\nPlease verify or trust the certificate before printing.");
+            return;
+        }
+
         PrintManager printManager = (PrintManager) getSystemService(Context.PRINT_SERVICE);
         if (printManager == null) {
             toast("Print service is not available on this device.");
             return;
         }
 
-        String jobName = getBaseName() + " (Verified)";
-        boolean isVerified = isDocumentCryptographicallyValid();
-        String signerName = getPrimarySignerName();
-        String signingDate = getPrimarySigningDate();
+        try {
+            // Strip data and preserve visuals
+            PdfStamperEngine.StampResult result = PdfStamperEngine.processPdf(currentPdf, currentPdfPassword);
+            byte[] visualPdf = result.printablePdf;
+            String jobName = getBaseName() + " (Verified)";
+            String signerName = getPrimarySignerName();
+            String signingDate = getPrimarySigningDate();
 
-        PdfPrintDocumentAdapter adapter = new PdfPrintDocumentAdapter(
-                this, currentPdf, currentPdfPassword, currentPdfName, isVerified, signerName, signingDate);
+            // visualPdf already has the checkmark and text baked in!
+            // Passing isVerified = false to PdfPrintDocumentAdapter renders visualPdf cleanly without drawing a second overlay.
+            PdfPrintDocumentAdapter adapter = new PdfPrintDocumentAdapter(
+                    this, visualPdf, null, currentPdfName, false, signerName, signingDate);
 
-        printManager.print(jobName, adapter, null);
+            printManager.print(jobName, adapter, null);
+        } catch (Exception e) {
+            toast("Failed to prepare document for printing: " + safeMessage(e));
+        }
     }
 
     private String getPrimarySignerName() {
@@ -572,25 +583,6 @@ public final class MainActivity extends AppCompatActivity {
                     fpView.setOnClickListener(v -> copyToClipboard("Certificate Fingerprint", signer.fingerprint));
                     sigItem.addView(fpView);
                 }
-
-                if (signer.certificate != null && signer.cryptoValid) {
-                    final SignatureRecord curSig = record;
-                    final SignerRecord curSigner = signer;
-                    boolean isPinned = trustStore.isTrusted(signer.certificate);
-                    Button trustBtn = styledButton(isPinned ? "✓ Manage Trusted Certificate" : "+ Trust This Signer Certificate",
-                            isPinned ? 0xFF37474F : 0xFF1976D2, 0xFFFFFFFF);
-                    trustBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-                    trustBtn.setPadding(dp(12), dp(8), dp(12), dp(8));
-                    trustBtn.setOnClickListener(v -> {
-                        if (trustStore.isTrusted(curSigner.certificate)) {
-                            showCertificateDetails(curSig, curSigner);
-                        } else {
-                            showTrustConfirmation(curSig, curSigner);
-                        }
-                    });
-                    addSpaceIn(sigItem, 6);
-                    sigItem.addView(trustBtn);
-                }
             }
 
             breakdownCard.addView(sigItem);
@@ -601,36 +593,6 @@ public final class MainActivity extends AppCompatActivity {
         contentContainer.addView(breakdownCard);
     }
 
-    private void renderTrustSettingsCard() {
-        LinearLayout trustCard = createCard();
-        trustCard.setPadding(dp(18), dp(18), dp(18), dp(18));
-
-        TextView secTitle = text("CERTIFICATE & TRUST MANAGEMENT", 12, true, 0xFF78909C);
-        trustCard.addView(secTitle);
-        addSpaceIn(trustCard, 10);
-
-        Button manageTrustedBtn = styledButton("Manage Explicitly Trusted Signers", 0xFF455A64, 0xFFFFFFFF);
-        manageTrustedBtn.setOnClickListener(v -> showTrustedCertificates());
-        trustCard.addView(manageTrustedBtn);
-        addSpaceIn(trustCard, 8);
-
-        Button importCaBtn = styledButton("Import CA Trust Anchor (.cer / .crt)", 0xFF546E7A, 0xFFFFFFFF);
-        importCaBtn.setOnClickListener(v -> chooseTrustedCa());
-        trustCard.addView(importCaBtn);
-        addSpaceIn(trustCard, 8);
-
-        Button manageCaBtn = styledButton("Manage CA Trust Anchors", 0xFF607D8B, 0xFFFFFFFF);
-        manageCaBtn.setOnClickListener(v -> showTrustedCaAnchors());
-        trustCard.addView(manageCaBtn);
-        addSpaceIn(trustCard, 12);
-
-        TextView note = text("Security Note: Bundled CCA India (2022, 2014, 2015 SPL) and nCode intermediate CAs are built directly into this app for Indian digital signatures. Imported CA anchors only modify trust within this app.", 11, false, 0xFF78909C);
-        trustCard.addView(note);
-
-        addSpaceIn(contentContainer, 12);
-        contentContainer.addView(trustCard);
-    }
-
     private void choosePdf() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -638,70 +600,33 @@ public final class MainActivity extends AppCompatActivity {
         startActivityForResult(intent, PICK_PDF);
     }
 
-    private void chooseTrustedCa() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("*/*");
-        startActivityForResult(intent, PICK_TRUSTED_CA);
-    }
-
     private InputStream openUriInputStream(Uri uri) throws Exception {
         if (uri == null) throw new IllegalArgumentException("URI is null");
         if ("file".equalsIgnoreCase(uri.getScheme()) && uri.getPath() != null) {
-            return new java.io.FileInputStream(new File(uri.getPath()));
+            File f = new File(uri.getPath());
+            if (f.exists()) return new java.io.FileInputStream(f);
         }
-        return getContentResolver().openInputStream(uri);
+        InputStream in = getContentResolver().openInputStream(uri);
+        if (in != null) return in;
+        throw new IllegalStateException("Cannot open input stream for URI: " + uri);
     }
 
     private void loadPdfFromUri(Uri uri) {
         try (InputStream in = openUriInputStream(uri)) {
-            if (in == null) throw new IllegalStateException("Unable to open selected document.");
             currentPdf = readBounded(in, MAX_PDF_BYTES);
             currentPdfName = queryDisplayName(uri);
-            renderedPagePreview = null;
+            promptedForCurrentDoc = false;
             inspectPdf();
         } catch (Exception e) {
-            currentPdf = null;
-            renderedPagePreview = null;
-            records.clear();
-            renderDocumentView();
-            showStatusDialog("Could Not Open PDF", "Failed to read or parse PDF: " + safeMessage(e));
+            showStatusDialog("Open Error", "Could not read selected PDF: " + safeMessage(e));
         }
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == SAVE_PDF_COPY) {
-            if (resultCode != RESULT_OK || data == null || data.getData() == null) {
-                pendingSaveBytes = null;
-                return;
-            }
-            if (pendingSaveBytes == null) {
-                toast("The PDF output is no longer available. Please repeat the operation.");
-                return;
-            }
-            try (OutputStream out = getContentResolver().openOutputStream(data.getData(), "wt")) {
-                if (out == null) throw new IllegalStateException("Unable to create destination PDF.");
-                out.write(pendingSaveBytes);
-                out.flush();
-                toast("PDF saved successfully.");
-            } catch (Exception e) {
-                toast("Could not save PDF: " + safeMessage(e));
-            } finally {
-                pendingSaveBytes = null;
-            }
-            return;
-        }
-
-        if (requestCode == PICK_TRUSTED_CA) {
-            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
-                reviewTrustedCa(data.getData());
-            }
-            return;
-        }
-
         if (requestCode == PICK_PDF && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            promptedForCurrentDoc = false;
             loadPdfFromUri(data.getData());
         }
     }
@@ -807,6 +732,67 @@ public final class MainActivity extends AppCompatActivity {
 
         renderDocumentView();
         generateDynamicPreview();
+
+        // Automatic verification vs. Prompt for Untrusted Signature
+        checkAndPromptUntrustedSignature();
+    }
+
+    private void checkAndPromptUntrustedSignature() {
+        if (records.isEmpty() || isDocumentTampered() || promptedForCurrentDoc) {
+            return;
+        }
+
+        // If the document is already cryptographically valid & trusted: verify automatically with NO popup!
+        if (isDocumentCryptographicallyValid()) {
+            return;
+        }
+
+        // Find the first untrusted signer that is mathematically valid
+        SignerRecord untrustedSigner = null;
+        for (SignatureRecord rec : records) {
+            for (SignerRecord signer : rec.signers) {
+                if (signer.cryptoValid && signer.certificate != null) {
+                    boolean isPinned = trustStore.isTrusted(signer.certificate);
+                    boolean isPathTrusted = signer.pathResult != null &&
+                            (signer.pathResult.status == CertificatePathValidator.Status.TRUSTED_SYSTEM_PATH
+                                    || signer.pathResult.status == CertificatePathValidator.Status.TRUSTED_APP_PATH);
+                    if (!isPathTrusted && !isPinned) {
+                        untrustedSigner = signer;
+                        break;
+                    }
+                }
+            }
+            if (untrustedSigner != null) break;
+        }
+
+        if (untrustedSigner != null) {
+            promptedForCurrentDoc = true;
+            final SignerRecord signerToTrust = untrustedSigner;
+            String signerName = extractCommonName(signerToTrust.certificate.getSubjectX500Principal().getName());
+            String issuerName = extractCommonName(signerToTrust.certificate.getIssuerX500Principal().getName());
+            String fp = signerToTrust.fingerprint != null ? signerToTrust.fingerprint : "";
+            if (fp.length() > 32) fp = fp.substring(0, 32) + "...";
+
+            new AlertDialog.Builder(this)
+                    .setTitle("Signature Found")
+                    .setMessage("A valid digital signature was found in this document:\n\n" +
+                            "• Signer: " + signerName + "\n" +
+                            "• Issuer: " + issuerName + "\n" +
+                            "• SHA-256: " + fp + "\n\n" +
+                            "This signature is mathematically valid, but the certificate is not yet in your trusted store.\n\n" +
+                            "Add this certificate to your trusted store to verify the signature?")
+                    .setPositiveButton("Add to Trusted", (d, w) -> {
+                        try {
+                            trustStore.trust(signerToTrust.certificate);
+                            toast("Added to trusted certificates");
+                            inspectPdf();
+                        } catch (Exception e) {
+                            toast("Could not trust certificate: " + safeMessage(e));
+                        }
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        }
     }
 
     private void generateDynamicPreview() {
@@ -822,7 +808,6 @@ public final class MainActivity extends AppCompatActivity {
 
                 if (doc.getNumberOfPages() == 0) return;
                 PDFRenderer renderer = new PDFRenderer(doc);
-                // Identify first page containing a signature widget
                 int previewPageIndex = 0;
                 PDAcroForm acroForm = doc.getDocumentCatalog().getAcroForm();
                 if (acroForm != null) {
@@ -859,42 +844,55 @@ public final class MainActivity extends AppCompatActivity {
                             PDSignatureField sigField = (PDSignatureField) field;
                             PDSignature pdSig = sigField.getSignature();
 
-                            // Correlate signature field with matching validated record
                             String widgetSignerName = null;
                             String widgetSigningDate = null;
                             if (pdSig != null) {
-                                widgetSignerName = pdSig.getName();
-                                if (pdSig.getSignDate() != null) {
-                                    widgetSigningDate = DateFormat.getDateTimeInstance().format(pdSig.getSignDate().getTime());
-                                }
-                            }
-                            for (SignatureRecord rec : records) {
-                                if (rec.signature == pdSig || (rec.signature != null && pdSig != null && java.util.Objects.equals(rec.signature.getCOSObject(), pdSig.getCOSObject()))) {
-                                    if (!rec.signers.isEmpty() && rec.signers.get(0).certificate != null) {
-                                        String dn = rec.signers.get(0).certificate.getSubjectX500Principal().getName();
-                                        widgetSignerName = extractCommonName(dn);
+                                for (SignatureRecord r : records) {
+                                    if (r.signature == pdSig && !r.signers.isEmpty()) {
+                                        SignerRecord sr = r.signers.get(0);
+                                        if (sr.certificate != null) {
+                                            widgetSignerName = extractCommonName(sr.certificate.getSubjectX500Principal().getName());
+                                        }
+                                        if (pdSig.getSignDate() != null) {
+                                            widgetSigningDate = DateFormat.getDateTimeInstance().format(pdSig.getSignDate().getTime());
+                                        }
+                                        break;
                                     }
-                                    break;
                                 }
                             }
                             if (widgetSignerName == null) widgetSignerName = getPrimarySignerName();
                             if (widgetSigningDate == null) widgetSigningDate = getPrimarySigningDate();
 
-                            for (PDAnnotationWidget widget : field.getWidgets()) {
-                                boolean isOnThisPage = widget.getPage() == null || doc.getPages().indexOf(widget.getPage()) == previewPageIndex;
-                                if (isOnThisPage) {
-                                    PDRectangle rect = widget.getRectangle();
-                                    if (rect != null && rect.getWidth() > 0 && rect.getHeight() > 0) {
-                                        float left = (rect.getLowerLeftX() - crop.getLowerLeftX()) * scaleX;
-                                        float right = (rect.getUpperRightX() - crop.getLowerLeftX()) * scaleX;
-                                        float top = (crop.getUpperRightY() - rect.getUpperRightY()) * scaleY;
-                                        float bottom = (crop.getUpperRightY() - rect.getLowerLeftY()) * scaleY;
-
-                                        RectF badgeRect = new RectF(left, top, right, bottom);
-                                        DynamicSignatureOverlay.AppearanceLayout layout = DynamicSignatureOverlay.extractAppearanceLayout(widget);
-                                        DynamicSignatureOverlay.drawSignatureBadge(canvas, badgeRect, widgetSignerName, widgetSigningDate, layout, true);
-                                    }
+                            for (PDAnnotationWidget widget : sigField.getWidgets()) {
+                                boolean isOnThisPage = false;
+                                if (widget.getPage() != null) {
+                                    isOnThisPage = doc.getPages().indexOf(widget.getPage()) == previewPageIndex;
+                                } else {
+                                    try {
+                                        List<PDAnnotation> pageAnnots = page.getAnnotations();
+                                        if (pageAnnots != null) {
+                                            for (PDAnnotation annot : pageAnnots) {
+                                                if (annot.getCOSObject().equals(widget.getCOSObject())) {
+                                                    isOnThisPage = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    } catch (Exception ignored) { }
                                 }
+                                if (!isOnThisPage) continue;
+
+                                PDRectangle rect = widget.getRectangle();
+                                if (rect == null) continue;
+
+                                float x = (rect.getLowerLeftX() - crop.getLowerLeftX()) * scaleX;
+                                float y = (crop.getUpperRightY() - rect.getUpperRightY()) * scaleY;
+                                float w = rect.getWidth() * scaleX;
+                                float h = rect.getHeight() * scaleY;
+
+                                RectF badgeRect = new RectF(x, y, x + w, y + h);
+                                DynamicSignatureOverlay.AppearanceLayout layout = DynamicSignatureOverlay.extractAppearanceLayout(widget);
+                                DynamicSignatureOverlay.drawSignatureBadge(canvas, badgeRect, widgetSignerName, widgetSigningDate, layout, true);
                             }
                         }
                     }
@@ -904,23 +902,36 @@ public final class MainActivity extends AppCompatActivity {
                     renderedPagePreview = mutableBmp;
                     renderDocumentView();
                 });
-            } catch (Exception ignored) { }
+            } catch (Exception e) {
+                // Keep existing preview
+            }
         }).start();
     }
 
     /**
-     * Strictly verifies that all digital signatures in the document are mathematically
-     * valid, have intact ByteRanges without tampering, and chain to a trusted CA.
-     * Prevents generating visual 'verified' stamps on invalid or untrusted signatures.
+     * Checks if the document was modified or tampered with after signing.
+     */
+    private boolean isDocumentTampered() {
+        if (records.isEmpty()) return false;
+        for (SignatureRecord rec : records) {
+            if (!rec.byteRangePlausible || rec.parseError != null) return true;
+            if (rec.revisionReport != null && rec.revisionReport.hasFailedChecks()) return true;
+            if (rec.signers.isEmpty()) return true;
+            for (SignerRecord signer : rec.signers) {
+                if (!signer.cryptoValid) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns true if every signature has valid CMS mathematics AND chains to a trusted root authority.
      */
     private boolean isDocumentCryptographicallyValid() {
         if (records.isEmpty()) return false;
+        if (isDocumentTampered()) return false;
         for (SignatureRecord rec : records) {
-            if (!rec.byteRangePlausible || rec.parseError != null) return false;
-            if (rec.revisionReport != null && rec.revisionReport.hasFailedChecks()) return false;
-            if (rec.signers.isEmpty()) return false;
             for (SignerRecord signer : rec.signers) {
-                if (!signer.cryptoValid) return false;
                 boolean trusted = signer.pathResult != null &&
                         (signer.pathResult.status == CertificatePathValidator.Status.TRUSTED_SYSTEM_PATH
                                 || signer.pathResult.status == CertificatePathValidator.Status.TRUSTED_APP_PATH
@@ -929,82 +940,6 @@ public final class MainActivity extends AppCompatActivity {
             }
         }
         return true;
-    }
-
-    private void fixSignatureAppearance() {
-        if (currentPdf == null) {
-            toast("Please select a PDF first.");
-            return;
-        }
-        if (records.isEmpty()) {
-            toast("No digital signatures found in this document to fix.");
-            return;
-        }
-        if (!isDocumentCryptographicallyValid()) {
-            showStatusDialog("Visual Rectification Blocked",
-                    "Cryptographic validation failed or certificate is untrusted.\n\n" +
-                    "A visual 'Signature valid' green checkmark can ONLY be generated for documents whose digital signatures have been mathematically verified against trusted certificate authorities.\n\n" +
-                    "Please ensure the certificate chains to a trusted root authority (e.g. CCA India / nCode / System CA) or explicitly trust the signer before rectifying.");
-            return;
-        }
-        try {
-            PdfStamperEngine.StampResult result = PdfStamperEngine.processPdf(currentPdf, currentPdfPassword);
-            byte[] fixedPdf = result.rectifiedPdf;
-            String baseName = getBaseName();
-            String outputName = baseName + "-visual-print-copy.pdf";
-            showExportOptionsDialog("Rendered Visual Print Copy Ready",
-                    "The signature appearance has been updated with the Adobe-standard green checkmark and 'Signature valid' status for paper printing and basic viewers.\n\n" +
-                    "⚠️ INTEGRITY NOTICE: Modifying visual appearance streams alters PDF bytes and invalidates digital signature cryptographic hashes. This file is intended as a visual print replica. To maintain digital legal non-repudiation, retain your Original Signed PDF.",
-                    fixedPdf, outputName);
-        } catch (Exception e) {
-            toast("Failed to fix signature appearance: " + safeMessage(e));
-        }
-    }
-
-    private void exportFlattenedPrintablePdf() {
-        if (currentPdf == null) {
-            toast("Please select a PDF first.");
-            return;
-        }
-        if (records.isEmpty()) {
-            toast("No digital signatures found in this document to export.");
-            return;
-        }
-        if (!isDocumentCryptographicallyValid()) {
-            showStatusDialog("Flattened Export Blocked",
-                    "Cryptographic validation failed or certificate is untrusted.\n\n" +
-                    "A flattened printable PDF can only be generated for documents whose digital signatures have been mathematically verified.\n\n" +
-                    "Please ensure the certificate chains to a trusted root authority or trust the signer first.");
-            return;
-        }
-        try {
-            PdfStamperEngine.StampResult result = PdfStamperEngine.processPdf(currentPdf, currentPdfPassword);
-            byte[] flattenedPdf = result.printablePdf;
-            String baseName = getBaseName();
-            String outputName = baseName + "-flattened-print.pdf";
-            showExportOptionsDialog("Flattened Printable PDF Ready",
-                    "The green checkmark is now permanently burned onto the page content, and AcroForm annotations were stripped so all legacy printers display it correctly.\n\n" +
-                    "⚠️ INTEGRITY NOTICE: Destructive export for printing only. Signature widgets and AcroForm dictionaries have been removed.",
-                    flattenedPdf, outputName);
-        } catch (Exception e) {
-            toast("Failed to export printable PDF: " + safeMessage(e));
-        }
-    }
-
-    private void showExportOptionsDialog(String title, String message, byte[] pdfBytes, String defaultFileName) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle(title);
-        builder.setMessage(message + "\n\nOutput: " + defaultFileName + " (" + formatFileSize(pdfBytes.length) + ")");
-        builder.setPositiveButton("Save to Downloads", (dialog, which) -> {
-            saveBytesToDownloads(pdfBytes, defaultFileName);
-        });
-        builder.setNeutralButton("Share", (dialog, which) -> {
-            sharePdfBytes(pdfBytes, defaultFileName);
-        });
-        builder.setNegativeButton("Open", (dialog, which) -> {
-            openPdfBytes(pdfBytes, defaultFileName);
-        });
-        builder.show();
     }
 
     private void saveBytesToDownloads(byte[] bytes, String defaultFileName) {
@@ -1044,7 +979,7 @@ public final class MainActivity extends AppCompatActivity {
             final Uri finalUri = savedUri;
             new AlertDialog.Builder(this)
                     .setTitle("Saved to Downloads")
-                    .setMessage("File saved successfully to Downloads:\n" + defaultFileName)
+                    .setMessage("File saved successfully to Downloads:\n" + defaultFileName + "\n\n(Signature metadata stripped for universal viewing)")
                     .setPositiveButton("Open", (d, w) -> {
                         if (finalUri != null) {
                             openUri(finalUri);
@@ -1103,25 +1038,6 @@ public final class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void saveOriginalPdfCopy() {
-        if (currentPdf == null) {
-            toast("Choose a PDF first.");
-            return;
-        }
-        if (records.isEmpty()) {
-            toast("No embedded signature detected.");
-            return;
-        }
-        String baseName = getBaseName();
-        String outputName = baseName + "-original-signed.pdf";
-        showExportOptionsDialog("Original Signed PDF (Cryptographically Intact)",
-                "This exports the exact, un-modified original signed PDF bytes.\n\n" +
-                "✓ 100% byte-for-byte integrity preserved.\n" +
-                "✓ Retains valid ByteRange and CMS digital signatures for Adobe Acrobat and government portals.\n" +
-                "✓ Full legal non-repudiation.",
-                currentPdf.clone(), outputName);
-    }
-
     private void showPasswordDialog(boolean previousAttemptFailed) {
         if (currentPdf == null) return;
 
@@ -1150,224 +1066,32 @@ public final class MainActivity extends AppCompatActivity {
                 .setPositiveButton("Unlock", null)
                 .create();
 
-        dialog.setOnShowListener(ignored -> {
-            Button positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
-            positive.setOnClickListener(v -> {
-                currentPdfPassword = passwordInput.getText().toString();
+        dialog.setOnShowListener(d -> {
+            Button unlockBtn = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            unlockBtn.setOnClickListener(v -> {
+                String input = passwordInput.getText().toString();
+                if (TextUtils.isEmpty(input)) {
+                    passwordInput.setError("Password required");
+                    return;
+                }
+                currentPdfPassword = input;
                 dialog.dismiss();
                 inspectPdf();
             });
         });
         dialog.show();
-        passwordInput.requestFocus();
     }
 
-    private boolean checkByteRange(int[] range, byte[] pdfBytes) {
-        if (range == null || range.length != 4 || pdfBytes == null) return false;
-
-        long start1 = range[0];
-        long length1 = range[1];
-        long start2 = range[2];
-        long length2 = range[3];
-        long fileLength = pdfBytes.length;
-
-        if (start1 != 0 || length1 <= 0 || start2 <= length1 || length2 <= 0) return false;
-        if (length1 > fileLength || start2 > fileLength || length2 > fileLength) return false;
-        long end2 = start2 + length2;
-        if (end2 < start2 || end2 > fileLength) return false;
-
-        int gapStart = (int) length1;
-        int gapEnd = (int) start2;
-        if (gapEnd - gapStart < 2) return false;
-
-        while (gapStart < gapEnd && isPdfWhitespace(pdfBytes[gapStart])) gapStart++;
-        while (gapEnd > gapStart && isPdfWhitespace(pdfBytes[gapEnd - 1])) gapEnd--;
-        return gapEnd - gapStart >= 2
-                && pdfBytes[gapStart] == '<'
-                && pdfBytes[gapEnd - 1] == '>';
-    }
-
-    private boolean isPdfWhitespace(byte value) {
-        return value == 0 || value == 9 || value == 10 || value == 12 || value == 13 || value == 32;
-    }
-
-    private void showTrustConfirmation(SignatureRecord signatureRecord, SignerRecord signerRecord) {
-        if (signerRecord.certificate == null || signerRecord.fingerprint == null) {
-            toast("No signer certificate is available to trust.");
-            return;
-        }
-        X509Certificate cert = signerRecord.certificate;
-        String expectedFingerprint = signerRecord.fingerprint;
-
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(20), dp(8), dp(20), dp(4));
-
-        panel.addView(text("Trust only this exact signer certificate for PDF validation inside this app.", 14, false, 0xFF263238));
-        addSpaceIn(panel, 12);
-        panel.addView(text("SUBJECT", 11, true, 0xFF78909C));
-        panel.addView(text(cert.getSubjectX500Principal().getName(), 13, false, 0xFF263238));
-        addSpaceIn(panel, 8);
-        panel.addView(text("ISSUER", 11, true, 0xFF78909C));
-        panel.addView(text(cert.getIssuerX500Principal().getName(), 13, false, 0xFF263238));
-        addSpaceIn(panel, 8);
-        panel.addView(text("SHA-256 FINGERPRINT", 11, true, 0xFF78909C));
-        TextView fp = text(expectedFingerprint, 12, true, 0xFF1565C0);
-        fp.setTextIsSelectable(true);
-        panel.addView(fp);
-
-        CheckBox verifyCheck = new CheckBox(this);
-        verifyCheck.setText("I have independently verified the SHA-256 fingerprint");
-        verifyCheck.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        verifyCheck.setTextColor(0xFF37474F);
-        addSpaceIn(panel, 12);
-        panel.addView(verifyCheck);
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Trust Signer Certificate")
-                .setView(panel)
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Trust Signer", (d, which) -> {
-                    try {
-                        trustStore.trust(cert, verifyCheck.isChecked(), "User verified & trusted via PDF Validate");
-                        toast("Certificate trusted locally.");
-                        inspectPdf();
-                    } catch (Exception e) {
-                        toast("Could not trust certificate: " + safeMessage(e));
-                    }
-                }).create();
-
-        dialog.setOnShowListener(d -> {
-            Button posBtn = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
-            if (posBtn != null) {
-                posBtn.setEnabled(false);
-                verifyCheck.setOnCheckedChangeListener((btn, isChecked) -> {
-                    posBtn.setEnabled(isChecked);
-                });
-            }
-        });
-        dialog.show();
-    }
-
-    private void showCertificateDetails(SignatureRecord signatureRecord, SignerRecord signerRecord) {
-        X509Certificate cert = signerRecord.certificate;
-        String message = "SHA-256: " + signerRecord.fingerprint + "\n\n"
-                + "Subject: " + cert.getSubjectX500Principal().getName() + "\n\n"
-                + "Issuer: " + cert.getIssuerX500Principal().getName() + "\n\n"
-                + "Serial (hex): " + cert.getSerialNumber().toString(16).toUpperCase(Locale.ROOT) + "\n\n"
-                + "Validity: " + DateFormat.getDateTimeInstance().format(cert.getNotBefore()) + " — "
-                + DateFormat.getDateTimeInstance().format(cert.getNotAfter()) + "\n\n"
-                + "Mathematics: " + (signerRecord.cryptoValid ? "Verified" : "Not verified") + "\n"
-                + "Trust Path: " + (signerRecord.pathResult != null ? signerRecord.pathResult.status.name() : "UNKNOWN");
-
-        new AlertDialog.Builder(this)
-                .setTitle("Trusted Signer Certificate")
-                .setMessage(message)
-                .setNegativeButton("Close", null)
-                .setNeutralButton("Remove Trust", (d, w) -> {
-                    trustStore.remove(signerRecord.fingerprint);
-                    toast("Trust removed.");
-                    inspectPdf();
-                }).show();
-    }
-
-    private void showTrustedCertificates() {
-        List<String> fingerprints = trustStore.listFingerprints();
-        if (fingerprints.isEmpty()) {
-            new AlertDialog.Builder(this).setTitle("Trusted Signer Certificates")
-                    .setMessage("No individual signer certificates have been explicitly trusted.")
-                    .setPositiveButton("OK", null).show();
-            return;
-        }
-
-        String[] labels = new String[fingerprints.size()];
-        for (int i = 0; i < fingerprints.size(); i++) {
-            X509Certificate cert = trustStore.getCertificate(fingerprints.get(i));
-            String subject = cert == null ? "Invalid stored certificate" : cert.getSubjectX500Principal().getName();
-            labels[i] = subject + "\n" + fingerprints.get(i);
-        }
-
-        new AlertDialog.Builder(this).setTitle("Trusted Signer Certificates")
-                .setItems(labels, (dialog, which) -> {
-                    String fp = fingerprints.get(which);
-                    new AlertDialog.Builder(this)
-                            .setTitle("Remove Trusted Signer?")
-                            .setMessage("Remove trust for SHA-256:\n" + fp)
-                            .setNegativeButton("Cancel", null)
-                            .setPositiveButton("Remove", (d, w) -> {
-                                trustStore.remove(fp);
-                                toast("Trust removed.");
-                                if (currentPdf != null) inspectPdf();
-                            }).show();
-                }).setNegativeButton("Close", null).show();
-    }
-
-    private void showTrustedCaAnchors() {
-        List<X509Certificate> certificates = trustStore.getTrustedCertificateAuthorities();
-        if (certificates.isEmpty()) {
-            new AlertDialog.Builder(this).setTitle("Trusted CA Anchors")
-                    .setMessage("No user-imported CA anchors. The bundled CCA India roots and nCode intermediate CAs are built into the app.")
-                    .setPositiveButton("Close", null).show();
-            return;
-        }
-        String[] labels = new String[certificates.size()];
-        String[] fingerprints = new String[certificates.size()];
-        for (int i = 0; i < certificates.size(); i++) {
-            X509Certificate certificate = certificates.get(i);
-            try {
-                fingerprints[i] = TrustedCertificateStore.fingerprint(certificate);
-            } catch (Exception e) {
-                fingerprints[i] = "";
-            }
-            labels[i] = certificate.getSubjectX500Principal().getName() + "\nSHA-256: " + fingerprints[i];
-        }
-        new AlertDialog.Builder(this).setTitle("User Trusted CA Anchors")
-                .setItems(labels, (dialog, which) -> {
-                    String fingerprint = fingerprints[which];
-                    new AlertDialog.Builder(this)
-                            .setTitle("Remove CA Anchor?")
-                            .setMessage("Removing this CA anchor can make signatures that depend on it untrusted.")
-                            .setNegativeButton("Cancel", null)
-                            .setPositiveButton("Remove", (d, w) -> {
-                                trustStore.removeTrustedCertificateAuthority(fingerprint);
-                                toast("CA anchor removed.");
-                                if (currentPdf != null) inspectPdf();
-                            }).show();
-                }).setNegativeButton("Close", null).show();
-    }
-
-    private void reviewTrustedCa(Uri uri) {
-        try (InputStream in = getContentResolver().openInputStream(uri)) {
-            if (in == null) throw new IllegalStateException("Unable to open selected certificate.");
-            byte[] bytes = readBounded(in, 2L * 1024L * 1024L);
-            java.security.cert.CertificateFactory factory =
-                    java.security.cert.CertificateFactory.getInstance("X.509");
-            X509Certificate certificate = (X509Certificate) factory.generateCertificate(
-                    new ByteArrayInputStream(bytes));
-            if (certificate.getBasicConstraints() < 0) {
-                throw new SecurityException("This is not a CA certificate.");
-            }
-            String fingerprint = TrustedCertificateStore.fingerprint(certificate);
-            String message = "Import this CA certificate as an app-specific trust anchor?\n\n"
-                    + "Subject: " + certificate.getSubjectX500Principal().getName() + "\n\n"
-                    + "Issuer: " + certificate.getIssuerX500Principal().getName() + "\n\n"
-                    + "SHA-256: " + fingerprint;
-            new AlertDialog.Builder(this)
-                    .setTitle("Import CA Anchor")
-                    .setMessage(message)
-                    .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Import CA", (d, w) -> {
-                        try {
-                            trustStore.trustCertificateAuthority(certificate);
-                            toast("CA anchor imported.");
-                            if (currentPdf != null) inspectPdf();
-                        } catch (Exception e) {
-                            toast("Could not import CA: " + safeMessage(e));
-                        }
-                    }).show();
-        } catch (Exception e) {
-            toast("Certificate rejected: " + safeMessage(e));
-        }
+    private boolean checkByteRange(int[] range, byte[] fileBytes) {
+        if (range == null || range.length != 4) return false;
+        int r0 = range[0];
+        int r1 = range[1];
+        int r2 = range[2];
+        int r3 = range[3];
+        if (r0 != 0 || r1 <= 0 || r2 <= 0 || r3 <= 0) return false;
+        long sigEnd = (long) r0 + (long) r1;
+        long fileEnd = (long) r2 + (long) r3;
+        return sigEnd <= r2 && fileEnd <= fileBytes.length;
     }
 
     private byte[] readBounded(InputStream in, long limit) throws Exception {
@@ -1400,13 +1124,6 @@ public final class MainActivity extends AppCompatActivity {
             baseName = baseName.substring(0, baseName.length() - 4);
         }
         return baseName;
-    }
-
-    private String formatFileSize(long bytes) {
-        if (bytes < 1024) return bytes + " B";
-        int exp = (int) (Math.log(bytes) / Math.log(1024));
-        String pre = "KMGTPE".charAt(exp - 1) + "";
-        return String.format(Locale.US, "%.1f %sB", bytes / Math.pow(1024, exp), pre);
     }
 
     private void copyToClipboard(String label, String text) {

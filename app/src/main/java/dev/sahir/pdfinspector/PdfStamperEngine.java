@@ -506,12 +506,23 @@ public final class PdfStamperEngine {
             } catch (Exception ignored) { }
         }
 
-        // Only strip AcroForm if all fields were signature fields
-        if (!hasNonSigFields && acroForm != null) {
-            try {
-                COSDictionary catalog = document.getDocumentCatalog().getCOSObject();
+        // Strip all signature fields and dictionaries so downstream viewers (like Adobe Acrobat)
+        // treat the exported document purely as visual vector artwork without integrity violation warnings.
+        try {
+            COSDictionary catalog = document.getDocumentCatalog().getCOSObject();
+            if (!hasNonSigFields && acroForm != null) {
                 catalog.removeItem(COSName.ACRO_FORM);
-            } catch (Exception ignored) { }
-        }
+            } else if (acroForm != null) {
+                List<PDField> remainingFields = new ArrayList<>();
+                for (PDField f : acroForm.getFields()) {
+                    if (!(f instanceof PDSignatureField)) {
+                        remainingFields.add(f);
+                    }
+                }
+                acroForm.setFields(remainingFields);
+                acroForm.getCOSObject().removeItem(COSName.getPDFName("SigFlags"));
+            }
+            catalog.removeItem(COSName.getPDFName("Perms"));
+        } catch (Exception ignored) { }
     }
 }
