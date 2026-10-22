@@ -272,7 +272,7 @@ public final class PdfStamperEngine {
                             COSDictionary helveticaDict = new COSDictionary();
                             helveticaDict.setItem(COSName.TYPE, COSName.FONT);
                             helveticaDict.setItem(COSName.SUBTYPE, COSName.TYPE1);
-                            helveticaDict.setItem(COSName.BASE_FONT, COSName.getPDFName("Helvetica"));
+                            helveticaDict.setItem(COSName.BASE_FONT, COSName.getPDFName("Helvetica-Bold"));
                             helveticaDict.setItem(COSName.ENCODING, COSName.WIN_ANSI_ENCODING);
                             fontsDict.setItem(COSName.getPDFName("F1"), helveticaDict);
 
@@ -312,6 +312,27 @@ public final class PdfStamperEngine {
                                 }
                                 changed = true;
                             }
+
+                            // Ensure /F1 in /n2 resources points to Helvetica-Bold (Aadhaar parity with authentic Adobe DC)
+                            try {
+                                PDFormXObject n2Form = new PDFormXObject(n2Stream);
+                                PDResources n2Res = n2Form.getResources();
+                                if (n2Res == null) {
+                                    n2Res = new PDResources();
+                                    n2Form.setResources(n2Res);
+                                }
+                                COSDictionary n2Fonts = (COSDictionary) n2Res.getCOSObject().getDictionaryObject(COSName.FONT);
+                                if (n2Fonts == null) {
+                                    n2Fonts = new COSDictionary();
+                                    n2Res.getCOSObject().setItem(COSName.FONT, n2Fonts);
+                                }
+                                COSDictionary boldDict = new COSDictionary();
+                                boldDict.setItem(COSName.TYPE, COSName.FONT);
+                                boldDict.setItem(COSName.SUBTYPE, COSName.TYPE1);
+                                boldDict.setItem(COSName.BASE_FONT, COSName.getPDFName("Helvetica-Bold"));
+                                boldDict.setItem(COSName.ENCODING, COSName.WIN_ANSI_ENCODING);
+                                n2Fonts.setItem(COSName.getPDFName("F1"), boldDict);
+                            } catch (Exception ignored) { }
                         }
                     } catch (Exception ignored) { }
                 }
@@ -408,8 +429,21 @@ public final class PdfStamperEngine {
         float scale = Math.min(w / iconW, h / iconH) * iconScale;
         float sx = scale;
         float sy = scale;
-        float tx = (w - scale * iconW) * 0.5f;
-        float ty = (h - scale * iconH) * 0.5f;
+        float tx;
+        float ty;
+        if (isCompact) {
+            // Calibrated typography anchor for compact stamps (Aadhaar 50x30 pt per AGENTS.md Rule 2):
+            // Apex lands delicately on top curve of 1st "2" in 2026 (x=16.52 pt, y=7.65 pt in FRM)
+            // Right tip terminates inside "Signature" before "valid" (never devouring "26" or crossing into "valid")
+            scale = 0.10f;
+            sx = scale;
+            sy = scale;
+            tx = -19.11f;
+            ty = 17.78f;
+        } else {
+            tx = (w - scale * iconW) * 0.5f;
+            ty = (h - scale * iconH) * 0.5f;
+        }
 
         StringBuilder sb = new StringBuilder();
         sb.append("q\n");

@@ -244,11 +244,22 @@ public final class DynamicSignatureOverlay {
         String titleText = "Signature valid";
 
         // 3. Authentic Adobe Acrobat DC DigSig appearance layout (REA Function 0x180024FE0):
-        // Derives checkmark coordinates directly from the /FRM -> /n1 subform matrix in the PDF appearance stream.
-        // Canonical DigSig center in unit [0 .. 100] is at (51.55, 50.00) with size = 85.1 pt per 100 pt slot.
-        float checkCxPdf = layout.n1Tx + layout.n1Scale * 51.55f;
-        float checkCyPdf = layout.n1Ty + layout.n1Scale * 50.00f;
-        float checkSizePdf = layout.n1Scale * 85.10f;
+        boolean isCompact = widgetH <= 40f || widgetW <= 120f;
+        float checkCxPdf;
+        float checkCyPdf;
+        float checkSizePdf;
+        if (isCompact) {
+            // Exact typography-anchored checkmark per AGENTS.md Rule 2:
+            // Apex rests delicately on top of 1st "2" in 2026 (x=16.52 pt, y=7.65 pt in PDF)
+            // Right tip terminates inside "Signature" before "valid" without devouring "26"
+            checkSizePdf = 26.02f;
+            checkCxPdf = 19.72f;
+            checkCyPdf = 19.36f;
+        } else {
+            checkCxPdf = layout.n1Tx + layout.n1Scale * 51.55f;
+            checkCyPdf = layout.n1Ty + layout.n1Scale * 50.00f;
+            checkSizePdf = layout.n1Scale * 85.10f;
+        }
 
         float checkCx = bounds.left + checkCxPdf * scaleX;
         float checkCy = bounds.bottom - checkCyPdf * scaleY;
@@ -259,11 +270,11 @@ public final class DynamicSignatureOverlay {
         // 4. Draw "Signature valid" title on top
         canvas.drawText(titleText, titleX, titleY, titlePaint);
 
-        // 5. Draw detail lines at exact /n2 baselines
+        // 5. Draw detail lines at exact /n2 baselines with Helvetica-Bold for compact parity
         for (AppearanceLayout.Line line : layout.lines) {
             float lineSize = line.fontSize * scaleY;
             Paint detailPaint = new Paint();
-            AdobeCoolTypeEngine.configurePaint(detailPaint, lineSize, false);
+            AdobeCoolTypeEngine.configurePaint(detailPaint, lineSize, isCompact);
             float lx = bounds.left + line.x * scaleX;
             float ly = bounds.bottom - line.y * scaleY;
             canvas.drawText(line.text, lx, ly, detailPaint);
