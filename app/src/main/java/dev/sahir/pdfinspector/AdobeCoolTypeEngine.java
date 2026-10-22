@@ -203,4 +203,24 @@ public final class AdobeCoolTypeEngine {
             return titleX + 0.65f * measureExactWidth(text, fontSize, true);
         }
     }
+
+    /**
+     * Computes the exact checkmark right wing anchor inside 'Signature' (between 'u' and 'r'),
+     * strictly before the word 'valid', matching Adobe Acrobat DC compact stamp geometry.
+     */
+    public static float calculateAnchorInsideSignatureBetweenUAndR(String titleText, float titleX, float fontSize) {
+        String text = titleText != null ? titleText : "Signature valid";
+        String lower = text.toLowerCase(Locale.ROOT);
+        int sigIdx = lower.indexOf("signature");
+        if (sigIdx >= 0) {
+            float prefixWidth = sigIdx > 0 ? measureExactWidth(text.substring(0, sigIdx), fontSize, true) : 0f;
+            // "Signatu" (S, i, g, n, a, t, u) width
+            float signatuWidth = measureExactWidth("Signatu", fontSize, true);
+            float rWidth = measureExactWidth("r", fontSize, true);
+            // Terminate right at boundary between 'u' and 'r' (signatuWidth + 0.10 * rWidth)
+            return titleX + prefixWidth + signatuWidth + 0.10f * rWidth;
+        } else {
+            return titleX + 0.40f * measureExactWidth(text, fontSize, true);
+        }
+    }
 }

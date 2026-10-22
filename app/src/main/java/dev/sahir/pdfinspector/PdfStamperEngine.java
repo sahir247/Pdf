@@ -68,6 +68,16 @@ public final class PdfStamperEngine {
         }
     }
 
+        public static byte[] readStreamBytes(InputStream is) throws Exception {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] temp = new byte[4096];
+        int nRead;
+        while ((nRead = is.read(temp, 0, temp.length)) != -1) {
+            buffer.write(temp, 0, nRead);
+        }
+        return buffer.toByteArray();
+    }
+
     private PdfStamperEngine() { }
 
     /**
@@ -117,6 +127,7 @@ public final class PdfStamperEngine {
         Set<COSBase> visited = new HashSet<>();
 
         for (PDField field : acroForm.getFields()) {
+            if (!(field instanceof PDSignatureField)) continue;
             for (PDAnnotationWidget widget : field.getWidgets()) {
                 PDAppearanceDictionary appearance = widget.getAppearance();
                 if (appearance == null) continue;
@@ -172,29 +183,7 @@ public final class PdfStamperEngine {
         if (resources != null) {
             COSDictionary xobjects = (COSDictionary) resources.getCOSObject().getDictionaryObject(COSName.XOBJECT);
             if (xobjects != null) {
-                // Update /n4 font to Helvetica-Bold if present
-                COSName n4Key = COSName.getPDFName("n4");
-                if (xobjects.containsKey(n4Key)) {
-                    COSBase existingN4 = xobjects.getDictionaryObject(n4Key);
-                    if (existingN4 instanceof COSStream) {
-                        try {
-                            PDAppearanceStream n4Stream = new PDAppearanceStream((COSStream) existingN4);
-                            PDResources n4Res = n4Stream.getResources();
-                            if (n4Res != null) {
-                                COSDictionary n4Fonts = (COSDictionary) n4Res.getCOSObject().getDictionaryObject(COSName.FONT);
-                                if (n4Fonts != null) {
-                                    for (COSName fKey : n4Fonts.keySet()) {
-                                        COSBase fObj = n4Fonts.getDictionaryObject(fKey);
-                                        if (fObj instanceof COSDictionary) {
-                                            ((COSDictionary) fObj).setName(COSName.BASE_FONT, "Helvetica-Bold");
-                                            changed = true;
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (Exception ignored) { }
-                    }
-                }
+                // Retain standard font in /n4 (Helvetica regular per Adobe Acrobat DC reference)
 
                 // Check if this dictionary directly contains /n1 (the question mark)
                 COSName n1Key = COSName.getPDFName("n1");
@@ -302,20 +291,27 @@ public final class PdfStamperEngine {
         float h = height > 0 ? height : 100f;
         form.setBBox(new PDRectangle(0, 0, w, h));
 
-        float sx = w / 1000.0f;
-        float sy = h / 1000.0f;
+        float scale = 0.851f;
+        float sx = (w / 1000.0f) * scale;
+        float sy = (h / 1000.0f) * scale;
+        float tx = (w * (1.0f - scale)) * 0.5f;
+        float ty = (h * (1.0f - scale)) * 0.5f;
 
         StringBuilder sb = new StringBuilder();
         sb.append("q\n");
-        sb.append(String.format(Locale.ROOT, "%.4f 0 0 %.4f 0 0 cm\n", sx, sy));
+        sb.append(String.format(Locale.ROOT, "%.4f 0 0 %.4f %.4f %.4f cm\n", sx, sy, tx, ty));
         sb.append("1 J 1 j 4 M [] 0 d\n");
         sb.append("1.5 i\n");
-        sb.append("1 1 1 rg 1 1 1 RG 24 w\n");
-        sb.append("370 37 m 0 401 l 126 574 l 365 289 l 779 1000 l 944 876 l h b\n");
-        sb.append("0 G\n");
+        // Layer 1: Black 3D drop shadow (0 g non-stroking fill, extruded down-right)
+        sb.append("0 g\n");
         sb.append("406 0 m 55 349 l 157 485 l 396 200 l 817 916 l 963 808 l h f\n");
+        // Layer 2: Official Adobe green fill (#00B33B = 0 0.7 0.23 rg)
         sb.append("0 0.7 0.23 rg\n");
         sb.append("377 50 m 25 399 l 128 536 l 367 251 l 787 967 l 934 859 l h f\n");
+        // Layer 3: Subtle outline stroke (<= 0.35 w per AGENTS.md Rule 3)
+        sb.append("0 G\n");
+        sb.append("0.35 w\n");
+        sb.append("377 50 m 25 399 l 128 536 l 367 251 l 787 967 l 934 859 l h S\n");
         sb.append("Q\n");
 
         try (OutputStream out = form.getCOSObject().createOutputStream()) {
@@ -334,6 +330,19 @@ public final class PdfStamperEngine {
      * removing AcroForm dictionaries and annotations for universal compatibility.
      */
     private static void flattenSignatureAppearances(PDDocument document) {
+        Set<PDAnnotationWidget> sigWidgets = new HashSet<>();
+        boolean hasNonSigFields = false;
+        PDAcroForm acroForm = document.getDocumentCatalog().getAcroForm();
+        if (acroForm != null) {
+            for (PDField field : acroForm.getFields()) {
+                if (field instanceof PDSignatureField) {
+                    sigWidgets.addAll(field.getWidgets());
+                } else {
+                    hasNonSigFields = true;
+                }
+            }
+        }
+
         for (PDPage page : document.getPages()) {
             try {
                 List<PDAnnotation> annotations = page.getAnnotations();
@@ -343,35 +352,52 @@ public final class PdfStamperEngine {
                 for (PDAnnotation annot : annotations) {
                     if (annot instanceof PDAnnotationWidget) {
                         PDAnnotationWidget widget = (PDAnnotationWidget) annot;
-                        PDAppearanceDictionary appearance = widget.getAppearance();
-                        if (appearance != null && appearance.getNormalAppearance() != null) {
-                            PDAppearanceStream appStream = appearance.getNormalAppearance().getAppearanceStream();
-                            if (appStream != null) {
-                                PDRectangle rect = widget.getRectangle();
-                                if (rect != null && rect.getWidth() > 0 && rect.getHeight() > 0) {
-                                    try (PDPageContentStream contentStream = new PDPageContentStream(
-                                            document, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
-                                        contentStream.saveGraphicsState();
-                                        contentStream.transform(com.tom_roush.pdfbox.util.Matrix.getTranslateInstance(rect.getLowerLeftX(), rect.getLowerLeftY()));
-                                        contentStream.drawForm(appStream);
-                                        contentStream.restoreGraphicsState();
+                        // Strictly filter to signature widgets only
+                        if (sigWidgets.contains(widget)) {
+                            PDAppearanceDictionary appearance = widget.getAppearance();
+                            if (appearance != null && appearance.getNormalAppearance() != null) {
+                                PDAppearanceStream appStream = appearance.getNormalAppearance().getAppearanceStream();
+                                if (appStream != null) {
+                                    PDRectangle rect = widget.getRectangle();
+                                    if (rect != null && rect.getWidth() > 0 && rect.getHeight() > 0) {
+                                        try (PDPageContentStream contentStream = new PDPageContentStream(
+                                                document, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                                            contentStream.saveGraphicsState();
+                                            PDRectangle bbox = appStream.getBBox();
+                                            float bboxX = bbox != null ? bbox.getLowerLeftX() : 0f;
+                                            float bboxY = bbox != null ? bbox.getLowerLeftY() : 0f;
+                                            float bboxW = bbox != null && bbox.getWidth() > 0 ? bbox.getWidth() : rect.getWidth();
+                                            float bboxH = bbox != null && bbox.getHeight() > 0 ? bbox.getHeight() : rect.getHeight();
+                                            float sx = rect.getWidth() / bboxW;
+                                            float sy = rect.getHeight() / bboxH;
+                                            float tx = rect.getLowerLeftX() - bboxX * sx;
+                                            float ty = rect.getLowerLeftY() - bboxY * sy;
+                                            com.tom_roush.pdfbox.util.Matrix matrix = new com.tom_roush.pdfbox.util.Matrix(sx, 0, 0, sy, tx, ty);
+                                            contentStream.transform(matrix);
+                                            contentStream.drawForm(appStream);
+                                            contentStream.restoreGraphicsState();
+                                        }
                                     }
                                 }
                             }
+                            toRemove.add(widget);
                         }
-                        toRemove.add(widget);
                     }
                 }
 
-                annotations.removeAll(toRemove);
-                page.setAnnotations(annotations);
+                if (!toRemove.isEmpty()) {
+                    annotations.removeAll(toRemove);
+                    page.setAnnotations(annotations);
+                }
             } catch (Exception ignored) { }
         }
 
-        // Strip AcroForm from document catalog
-        try {
-            COSDictionary catalog = document.getDocumentCatalog().getCOSObject();
-            catalog.removeItem(COSName.ACRO_FORM);
-        } catch (Exception ignored) { }
+        // Only strip AcroForm if all fields were signature fields
+        if (!hasNonSigFields && acroForm != null) {
+            try {
+                COSDictionary catalog = document.getDocumentCatalog().getCOSObject();
+                catalog.removeItem(COSName.ACRO_FORM);
+            } catch (Exception ignored) { }
+        }
     }
 }

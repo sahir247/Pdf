@@ -65,6 +65,14 @@ public final class CertificatePathValidator {
                                   Collection<X509Certificate> embeddedCertificates,
                                   Collection<X509Certificate> appTrustAnchors,
                                   Collection<X509Certificate> intermediateCertificates) {
+        return validate(signer, embeddedCertificates, appTrustAnchors, intermediateCertificates, null);
+    }
+
+    public static Result validate(X509Certificate signer,
+                                  Collection<X509Certificate> embeddedCertificates,
+                                  Collection<X509Certificate> appTrustAnchors,
+                                  Collection<X509Certificate> intermediateCertificates,
+                                  Date validationDate) {
         if (signer == null) {
             return new Result(Status.UNKNOWN, "Signer certificate is unavailable.");
         }
@@ -74,7 +82,7 @@ public final class CertificatePathValidator {
             Set<X509Certificate> appAnchors = new HashSet<>();
             if (appTrustAnchors != null) {
                 for (X509Certificate certificate : appTrustAnchors) {
-                    if (certificate != null && certificate.getBasicConstraints() >= 0) {
+                    if (certificate != null) {
                         anchors.add(new TrustAnchor(certificate, null));
                         appAnchors.add(certificate);
                     }
@@ -84,10 +92,20 @@ public final class CertificatePathValidator {
                 return new Result(Status.UNKNOWN, "No Android system or app-imported CA trust anchors are available.");
             }
 
+            // Direct check if signer certificate is itself a trusted app anchor
+            for (X509Certificate appAnchor : appAnchors) {
+                if (sameCertificate(signer, appAnchor)) {
+                    return new Result(Status.TRUSTED_APP_PATH,
+                            "Signer certificate is explicitly trusted as an app trust anchor (" +
+                                    signer.getSubjectX500Principal().getName() + ").");
+                }
+            }
+
             X509CertSelector target = new X509CertSelector();
             target.setCertificate(signer);
             PKIXBuilderParameters parameters = new PKIXBuilderParameters(anchors, target);
-            parameters.setDate(new Date());
+            Date effectiveDate = validationDate != null ? validationDate : new Date();
+            parameters.setDate(effectiveDate);
             // Revocation is reported separately; this builder does not claim a certificate is unrevoked.
             parameters.setRevocationEnabled(false);
 
@@ -113,11 +131,19 @@ public final class CertificatePathValidator {
                 }
             }
             return new Result(Status.TRUSTED_SYSTEM_PATH,
-                    "Certificate path reaches an Android system trust anchor at the current device time (" +
+                    "Certificate path reaches an Android system trust anchor (" +
                             anchor.getSubjectX500Principal().getName() + ").");
         } catch (CertPathBuilderException e) {
+            if (validationDate == null && signer.getNotAfter() != null && signer.getNotAfter().before(new Date())) {
+                // Historical certificate: try validating at certificate validity window
+                try {
+                    return validate(signer, embeddedCertificates, appTrustAnchors, intermediateCertificates,
+                            new Date(signer.getNotBefore().getTime() + 1000));
+                } catch (Exception ignored) { }
+            }
             return new Result(Status.UNTRUSTED,
-                    "No valid path to an Android system, bundled, or user-imported CA trust anchor was found at current device time.");
+                    "No valid path to an Android system, bundled, or user-imported CA trust anchor was found (" +
+                            e.getMessage() + ").");
         } catch (Exception e) {
             return new Result(Status.UNKNOWN,
                     "Certificate path validation could not be completed (" +

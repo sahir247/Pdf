@@ -42,7 +42,7 @@ import java.util.regex.Pattern;
  */
 public final class DynamicSignatureOverlay {
 
-    public static final int ADOBE_GREEN = Color.rgb(0, 161, 40); // #00A128 Adobe Acrobat green
+    public static final int ADOBE_GREEN = Color.rgb(0, 179, 59); // #00B33B Official Adobe Acrobat green
     public static final int TEXT_BLACK = Color.BLACK;
 
     // Adobe Acrobat DC DigSig.api native vector coordinates (% DSDoubleValid)
@@ -69,16 +69,6 @@ public final class DynamicSignatureOverlay {
             {96.3f, 19.2f}
     };
 
-    // White background outline path (1 g):
-    // 370 37 m, 0 401 l, 126 574 l, 365 289 l, 779 1000 l, 944 876 l
-    private static final float[][] ADOBE_WHITE_PTS = {
-            {37.0f, 96.3f},
-            {0.0f,  59.9f},
-            {12.6f, 42.6f},
-            {36.5f, 71.1f},
-            {77.9f, 0.0f},
-            {94.4f, 12.4f}
-    };
 
     // Canonical center of unit [0 .. 100] coordinate grid
     private static final float BBOX_CENTER_X = 50.0f;
@@ -87,6 +77,16 @@ public final class DynamicSignatureOverlay {
     // Mathematical vector from checkmark centroid to the top tip (78.7f, 3.3f)
     private static final float TIP_OFFSET_DX = 78.7f - BBOX_CENTER_X; // +30.75f
     private static final float TIP_OFFSET_DY = 3.3f - BBOX_CENTER_Y;  // -45.85f
+
+        private static byte[] readStreamBytes(InputStream is) throws Exception {
+        java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+        byte[] temp = new byte[4096];
+        int nRead;
+        while ((nRead = is.read(temp, 0, temp.length)) != -1) {
+            buffer.write(temp, 0, nRead);
+        }
+        return buffer.toByteArray();
+    }
 
     private DynamicSignatureOverlay() { }
 
@@ -234,47 +234,66 @@ public final class DynamicSignatureOverlay {
         canvas.drawRect(bounds.left, bounds.top, bounds.right, bounds.bottom, bgPaint);
 
         // 2. Prepare "Signature valid" title paint and baseline coordinates
-        Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        titlePaint.setColor(TEXT_BLACK);
-        titlePaint.setTypeface(getBoldTypeface());
-
-        float canvasTitleSize = (layout.titleFontSize > 0 ? layout.titleFontSize : 4.7f) * scaleY;
-        titlePaint.setTextSize(canvasTitleSize);
+        float titleFontSize = layout.titleFontSize > 0 ? layout.titleFontSize : 4.7f;
+        float canvasTitleSize = titleFontSize * scaleY;
+        Paint titlePaint = new Paint();
+        AdobeCoolTypeEngine.configurePaint(titlePaint, canvasTitleSize, true);
 
         float titleX = bounds.left + (layout.titleX >= 0 ? layout.titleX : 2.0f) * scaleX;
         float titleY = bounds.bottom - (layout.titleY >= 0 ? layout.titleY : widgetH * 0.77f) * scaleY;
         String titleText = "Signature valid";
 
-        // 3. Draw Adobe green checkmark vector using exact stream matrix or dynamic typography
-        float checkCx, checkCy, checkSize;
-        if (layout.n1Scale > 0) {
-            // Universal formula for all PDFs with /FRM stream matrix:
-            // /n1 has canonical BBox [0, 0, 100, 100], center is (50, 50)
-            float cxPdf = layout.n1Tx + 50.0f * layout.n1Scale;
-            float cyPdf = layout.n1Ty + 50.0f * layout.n1Scale;
-            float sizePdf = 100.0f * layout.n1Scale;
-            checkCx = bounds.left + cxPdf * scaleX;
-            checkCy = bounds.bottom - cyPdf * scaleY;
-            checkSize = sizePdf * scaleY;
+        // 3. Dynamic typography-driven checkmark placement (AGENTS.md Rules 1-4)
+        float titleWidth = AdobeCoolTypeEngine.measureExactWidth(titleText, titleFontSize, true);
+        boolean isCompact = widgetW < (layout.titleX >= 0 ? layout.titleX : 2.0f) + titleWidth * 1.05f || (widgetW <= 70f);
+
+        float tipXPdf;
+        if (isCompact) {
+            tipXPdf = AdobeCoolTypeEngine.calculateAnchorInsideSignatureBetweenUAndR(titleText, layout.titleX >= 0 ? layout.titleX : 2.0f, titleFontSize);
         } else {
-            CheckmarkPosition pos = calculateDynamicCheckmarkPosition(titlePaint, titleText, titleX, titleY, canvasTitleSize);
-            checkCx = pos.cx;
-            checkCy = pos.cy;
-            checkSize = pos.size;
+            tipXPdf = AdobeCoolTypeEngine.calculateAnchorInsideAOfValid(titleText, layout.titleX >= 0 ? layout.titleX : 2.0f, titleFontSize);
         }
+
+        float titleYPdf = layout.titleY >= 0 ? layout.titleY : widgetH * 0.77f;
+        float tipYPdf = titleYPdf + 0.48f * titleFontSize;
+
+        float apexYPdf;
+        if (isCompact) {
+            // Aadhaar / compact stamp: apex rests delicately on top of '2' in date line
+            float dateLineY = !layout.lines.isEmpty() ? layout.lines.get(layout.lines.size() - 1).y : (titleYPdf - 2.5f * titleFontSize);
+            float dateFontSize = !layout.lines.isEmpty() ? layout.lines.get(layout.lines.size() - 1).fontSize : 3.4f;
+            apexYPdf = dateLineY + 0.72f * dateFontSize;
+        } else {
+            // Standard banner (Income): apex rests on line N-2, hovering cleanly above bottom line (Dist / Location)
+            if (layout.lines.size() >= 2) {
+                AppearanceLayout.Line secondBottomLine = layout.lines.get(layout.lines.size() - 2);
+                apexYPdf = secondBottomLine.y + 0.15f * secondBottomLine.fontSize;
+            } else if (!layout.lines.isEmpty()) {
+                apexYPdf = layout.lines.get(0).y + 0.20f * layout.lines.get(0).fontSize;
+            } else {
+                apexYPdf = titleYPdf - 2.42f * titleFontSize;
+            }
+        }
+
+        float checkHeightPdf = Math.max(8.0f, tipYPdf - apexYPdf);
+        float checkSizePdf = checkHeightPdf;
+        float checkCxPdf = tipXPdf - (0.8673f - 0.5f) * checkSizePdf;
+        float checkCyPdf = tipYPdf - (1.0000f - 0.5f) * checkSizePdf;
+
+        float checkCx = bounds.left + checkCxPdf * scaleX;
+        float checkCy = bounds.bottom - checkCyPdf * scaleY;
+        float checkSize = checkSizePdf * scaleY;
+
         drawAdobeCheckmark(canvas, checkCx, checkCy, checkSize);
 
         // 4. Draw "Signature valid" title on top
         canvas.drawText(titleText, titleX, titleY, titlePaint);
 
         // 5. Draw detail lines at exact /n2 baselines
-        Paint detailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        detailPaint.setColor(TEXT_BLACK);
-        detailPaint.setTypeface(getRegularTypeface());
-
         for (AppearanceLayout.Line line : layout.lines) {
             float lineSize = line.fontSize * scaleY;
-            detailPaint.setTextSize(lineSize);
+            Paint detailPaint = new Paint();
+            AdobeCoolTypeEngine.configurePaint(detailPaint, lineSize, false);
             float lx = bounds.left + line.x * scaleX;
             float ly = bounds.bottom - line.y * scaleY;
             canvas.drawText(line.text, lx, ly, detailPaint);
@@ -319,15 +338,11 @@ public final class DynamicSignatureOverlay {
         float detailSize = Math.max(2.0f, height * 0.112f);
         float lineSpacing = detailSize * 1.05f;
 
-        Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        titlePaint.setColor(TEXT_BLACK);
-        titlePaint.setTypeface(getBoldTypeface());
-        titlePaint.setTextSize(titleSize);
+        Paint titlePaint = new Paint();
+        AdobeCoolTypeEngine.configurePaint(titlePaint, titleSize, true);
 
-        Paint detailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        detailPaint.setColor(TEXT_BLACK);
-        detailPaint.setTypeface(getRegularTypeface());
-        detailPaint.setTextSize(detailSize);
+        Paint detailPaint = new Paint();
+        AdobeCoolTypeEngine.configurePaint(detailPaint, detailSize, false);
 
         float textLeft = bounds.left + width * 0.04f;
         float maxTextWidth = titlePaint.measureText("Signature valid");
@@ -343,30 +358,18 @@ public final class DynamicSignatureOverlay {
         bgPaint.setStyle(Paint.Style.FILL);
         canvas.drawRect(bounds.left, bounds.top, maxRight, bounds.bottom, bgPaint);
 
-        // Proportional layout depending on aspect ratio
-        if (aspectRatio < 1.2f) {
-            // Square / compact signature: prominent checkmark centered
-            float checkSize = Math.min(width, height) * 0.85f;
-            drawAdobeCheckmark(canvas, bounds.centerX(), bounds.centerY(), checkSize);
-        } else if (aspectRatio >= 2.5f) {
-            // Wide banner signature: checkmark on left, text on right
-            float checkSize = height * 0.82f;
-            float iconCx = bounds.left + height * 0.5f;
-            float iconCy = bounds.centerY();
-            drawAdobeCheckmark(canvas, iconCx, iconCy, checkSize);
+        // Standard dynamic typography fallback
+        float titleX = textLeft;
+        float titleBaselineY = bounds.top + titleSize * 1.15f;
+        String titleText = "Signature valid";
 
-            float bannerTextLeft = bounds.left + height * 1.05f;
-            drawSignatureTextInternal(canvas, bannerTextLeft, bounds.top, titlePaint, detailPaint, titleSize, lineSpacing, linesToDraw);
-        } else {
-            // Standard rectangular signature (Aadhaar, eSign)
-            float titleX = textLeft;
-            float titleBaselineY = bounds.top + titleSize;
-            String titleText = "Signature valid";
+        float tipX = AdobeCoolTypeEngine.calculateAnchorInsideAOfValid(titleText, titleX, titleSize);
+        float checkSize = Math.min(height * 0.72f, titleSize * 2.90f);
+        float checkCx = tipX - (0.8673f - 0.5f) * checkSize;
+        float checkCy = titleBaselineY - 0.48f * titleSize - (1.0000f - 0.5f) * checkSize;
 
-            CheckmarkPosition pos = calculateDynamicCheckmarkPosition(titlePaint, titleText, titleX, titleBaselineY, titleSize);
-            drawAdobeCheckmark(canvas, pos.cx, pos.cy, pos.size);
-            drawSignatureTextInternal(canvas, textLeft, bounds.top, titlePaint, detailPaint, titleSize, lineSpacing, linesToDraw);
-        }
+        drawAdobeCheckmark(canvas, checkCx, checkCy, checkSize);
+        drawSignatureTextInternal(canvas, textLeft, bounds.top, titlePaint, detailPaint, titleSize, lineSpacing, linesToDraw);
     }
 
     /**
@@ -376,15 +379,7 @@ public final class DynamicSignatureOverlay {
         if (size <= 0) size = 20f;
         float scale = size / 100.0f;
 
-        // 1. White protective underlay
-        Path whitePath = new Path();
-        buildAdobeVectorPath(whitePath, ADOBE_WHITE_PTS, cx, cy, scale);
-        Paint whitePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        whitePaint.setColor(Color.WHITE);
-        whitePaint.setStyle(Paint.Style.FILL);
-        canvas.drawPath(whitePath, whitePaint);
-
-        // 2. Black drop shadow
+        // Layer 1: Black 3D drop shadow
         Path shadowPath = new Path();
         buildAdobeVectorPath(shadowPath, ADOBE_SHADOW_PTS, cx, cy, scale);
         Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -392,7 +387,7 @@ public final class DynamicSignatureOverlay {
         shadowPaint.setStyle(Paint.Style.FILL);
         canvas.drawPath(shadowPath, shadowPaint);
 
-        // 3. Vibrant Adobe Green fill (#00A128)
+        // Layer 2: Vibrant Adobe Green fill (#00B33B)
         Path greenPath = new Path();
         buildAdobeVectorPath(greenPath, ADOBE_GREEN_PTS, cx, cy, scale);
         Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -400,8 +395,13 @@ public final class DynamicSignatureOverlay {
         fillPaint.setStyle(Paint.Style.FILL);
         canvas.drawPath(greenPath, fillPaint);
 
-        // In Adobe Acrobat DC (% DSDoubleValid), the green checkmark is filled with vibrant green (#00A128)
-        // and shadowed by the layer underneath, with strictly no heavy cartoon black outline.
+        // Layer 3: Subtle outer outline stroke (<= 0.35 w per AGENTS.md Rule 3)
+        Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        strokePaint.setColor(Color.BLACK);
+        strokePaint.setStyle(Paint.Style.STROKE);
+        strokePaint.setStrokeWidth(Math.max(0.6f, size * 0.008f));
+        strokePaint.setStrokeJoin(Paint.Join.MITER);
+        canvas.drawPath(greenPath, strokePaint);
     }
 
     private static void buildAdobeVectorPath(Path path, float[][] pts, float cx, float cy, float scale) {
@@ -487,8 +487,7 @@ public final class DynamicSignatureOverlay {
 
                 // 1. Read /FRM stream for /n1 matrix: e.g. "q 0.54 0 0 0.54 33 3 cm /n1 Do Q"
                 try (InputStream is = frmForm.getContentStream().createInputStream()) {
-                    byte[] bytes = new byte[is.available()];
-                    is.read(bytes);
+                    byte[] bytes = readStreamBytes(is);
                     String frmStream = new String(bytes, StandardCharsets.ISO_8859_1);
                     Matcher m = Pattern.compile("([-\\d.]+)\\s+([-\\d.]+)\\s+([-\\d.]+)\\s+([-\\d.]+)\\s+([-\\d.]+)\\s+([-\\d.]+)\\s+cm\\s+/n1\\s+Do").matcher(frmStream);
                     if (m.find()) {
@@ -504,8 +503,7 @@ public final class DynamicSignatureOverlay {
                     PDXObject n4 = frmRes.getXObject(COSName.getPDFName("n4"));
                     if (n4 instanceof PDFormXObject) {
                         try (InputStream is = ((PDFormXObject) n4).getContentStream().createInputStream()) {
-                            byte[] bytes = new byte[is.available()];
-                            is.read(bytes);
+                            byte[] bytes = readStreamBytes(is);
                             String s = new String(bytes, StandardCharsets.ISO_8859_1);
                             Matcher mf = Pattern.compile("/F\\w+\\s+([\\d.]+)\\s+Tf").matcher(s);
                             if (mf.find()) {
@@ -523,8 +521,7 @@ public final class DynamicSignatureOverlay {
                     PDXObject n2 = frmRes.getXObject(COSName.getPDFName("n2"));
                     if (n2 instanceof PDFormXObject) {
                         try (InputStream is = ((PDFormXObject) n2).getContentStream().createInputStream()) {
-                            byte[] bytes = new byte[is.available()];
-                            is.read(bytes);
+                            byte[] bytes = readStreamBytes(is);
                             String s = new String(bytes, StandardCharsets.ISO_8859_1);
                             float defFontSize = 3.4f;
                             Matcher mf = Pattern.compile("/F\\w+\\s+([\\d.]+)\\s+Tf").matcher(s);

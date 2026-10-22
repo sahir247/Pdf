@@ -43,4 +43,27 @@ public class AdobeCoolTypeEngineTest {
         Assert.assertTrue("Anchor X must be far before start of 'd'", anchorX < dStart);
         Assert.assertTrue("Distance between anchor and 'd' must be >= 5 pt", (dStart - anchorX) >= 5.0f);
     }
+
+    @Test
+    public void testAnchorInsideSignatureBetweenUAndR() {
+        float titleX = 2.0f;
+        float fontSize = 4.7f;
+        String text = "Signature valid";
+
+        float anchorX = AdobeCoolTypeEngine.calculateAnchorInsideSignatureBetweenUAndR(text, titleX, fontSize);
+
+        float signatuWidth = AdobeCoolTypeEngine.measureExactWidth("Signatu", fontSize, true);
+        float signatureWidth = AdobeCoolTypeEngine.measureExactWidth("Signature", fontSize, true);
+
+        float uEnd = titleX + signatuWidth;
+        float sigEnd = titleX + signatureWidth;
+
+        // Verify anchor terminates inside 'Signature' before 'valid'
+        Assert.assertTrue("Anchor must be inside 'Signature' after 'u'", anchorX >= uEnd - 0.5f);
+        Assert.assertTrue("Anchor must be before end of 'Signature'", anchorX <= sigEnd);
+
+        // Verify it never reaches 'valid'
+        float validStart = titleX + AdobeCoolTypeEngine.measureExactWidth("Signature ", fontSize, true);
+        Assert.assertTrue("Anchor must be well before 'valid'", anchorX < validStart);
+    }
 }

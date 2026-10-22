@@ -27,6 +27,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -47,6 +48,7 @@ import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
 import com.tom_roush.pdfbox.pdmodel.interactive.digitalsignature.PDSignature;
 import com.tom_roush.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import com.tom_roush.pdfbox.pdmodel.interactive.form.PDField;
+import com.tom_roush.pdfbox.pdmodel.interactive.form.PDSignatureField;
 import com.tom_roush.pdfbox.rendering.PDFRenderer;
 
 import org.bouncycastle.cert.X509CertificateHolder;
@@ -261,9 +263,11 @@ public final class MainActivity extends AppCompatActivity {
                         allCryptoValid = false;
                         anyTampered = true;
                     }
-                    if (signer.pathResult == null ||
-                            (signer.pathResult.status != CertificatePathValidator.Status.TRUSTED_SYSTEM_PATH
-                                    && signer.pathResult.status != CertificatePathValidator.Status.TRUSTED_APP_PATH)) {
+                    boolean isPinned = signer.certificate != null && trustStore.isTrusted(signer.certificate);
+                    boolean isPathTrusted = signer.pathResult != null &&
+                            (signer.pathResult.status == CertificatePathValidator.Status.TRUSTED_SYSTEM_PATH
+                                    || signer.pathResult.status == CertificatePathValidator.Status.TRUSTED_APP_PATH);
+                    if (!isPathTrusted && !isPinned) {
                         allTrusted = false;
                     }
                 }
@@ -818,26 +822,67 @@ public final class MainActivity extends AppCompatActivity {
 
                 if (doc.getNumberOfPages() == 0) return;
                 PDFRenderer renderer = new PDFRenderer(doc);
-                Bitmap bmp = renderer.renderImage(0, 1.5f);
+                // Identify first page containing a signature widget
+                int previewPageIndex = 0;
+                PDAcroForm acroForm = doc.getDocumentCatalog().getAcroForm();
+                if (acroForm != null) {
+                    for (PDField field : acroForm.getFields()) {
+                        if (field instanceof PDSignatureField) {
+                            for (PDAnnotationWidget widget : field.getWidgets()) {
+                                if (widget.getPage() != null) {
+                                    int pIdx = doc.getPages().indexOf(widget.getPage());
+                                    if (pIdx >= 0) {
+                                        previewPageIndex = pIdx;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (previewPageIndex != 0) break;
+                    }
+                }
+
+                Bitmap bmp = renderer.renderImage(previewPageIndex, 1.5f);
                 Bitmap mutableBmp = bmp.copy(Bitmap.Config.ARGB_8888, true);
                 bmp.recycle();
 
                 if (isDocumentCryptographicallyValid()) {
                     Canvas canvas = new Canvas(mutableBmp);
-                    PDAcroForm acroForm = doc.getDocumentCatalog().getAcroForm();
-                    if (acroForm != null) {
-                        PDPage page = doc.getPage(0);
+                    if (acroForm != null && previewPageIndex < doc.getNumberOfPages()) {
+                        PDPage page = doc.getPage(previewPageIndex);
                         PDRectangle crop = page.getCropBox();
                         float scaleX = (float) mutableBmp.getWidth() / crop.getWidth();
                         float scaleY = (float) mutableBmp.getHeight() / crop.getHeight();
 
-                        String signerName = getPrimarySignerName();
-                        String signingDate = getPrimarySigningDate();
-
                         for (PDField field : acroForm.getFields()) {
+                            if (!(field instanceof PDSignatureField)) continue;
+                            PDSignatureField sigField = (PDSignatureField) field;
+                            PDSignature pdSig = sigField.getSignature();
+
+                            // Correlate signature field with matching validated record
+                            String widgetSignerName = null;
+                            String widgetSigningDate = null;
+                            if (pdSig != null) {
+                                widgetSignerName = pdSig.getName();
+                                if (pdSig.getSignDate() != null) {
+                                    widgetSigningDate = DateFormat.getDateTimeInstance().format(pdSig.getSignDate().getTime());
+                                }
+                            }
+                            for (SignatureRecord rec : records) {
+                                if (rec.signature == pdSig || (rec.signature != null && pdSig != null && java.util.Objects.equals(rec.signature.getCOSObject(), pdSig.getCOSObject()))) {
+                                    if (!rec.signers.isEmpty() && rec.signers.get(0).certificate != null) {
+                                        String dn = rec.signers.get(0).certificate.getSubjectX500Principal().getName();
+                                        widgetSignerName = extractCommonName(dn);
+                                    }
+                                    break;
+                                }
+                            }
+                            if (widgetSignerName == null) widgetSignerName = getPrimarySignerName();
+                            if (widgetSigningDate == null) widgetSigningDate = getPrimarySigningDate();
+
                             for (PDAnnotationWidget widget : field.getWidgets()) {
-                                boolean onPage0 = widget.getPage() == null || doc.getPages().indexOf(widget.getPage()) == 0;
-                                if (onPage0) {
+                                boolean isOnThisPage = widget.getPage() == null || doc.getPages().indexOf(widget.getPage()) == previewPageIndex;
+                                if (isOnThisPage) {
                                     PDRectangle rect = widget.getRectangle();
                                     if (rect != null && rect.getWidth() > 0 && rect.getHeight() > 0) {
                                         float left = (rect.getLowerLeftX() - crop.getLowerLeftX()) * scaleX;
@@ -847,7 +892,7 @@ public final class MainActivity extends AppCompatActivity {
 
                                         RectF badgeRect = new RectF(left, top, right, bottom);
                                         DynamicSignatureOverlay.AppearanceLayout layout = DynamicSignatureOverlay.extractAppearanceLayout(widget);
-                                        DynamicSignatureOverlay.drawSignatureBadge(canvas, badgeRect, signerName, signingDate, layout, true);
+                                        DynamicSignatureOverlay.drawSignatureBadge(canvas, badgeRect, widgetSignerName, widgetSigningDate, layout, true);
                                     }
                                 }
                             }
@@ -872,6 +917,7 @@ public final class MainActivity extends AppCompatActivity {
         if (records.isEmpty()) return false;
         for (SignatureRecord rec : records) {
             if (!rec.byteRangePlausible || rec.parseError != null) return false;
+            if (rec.revisionReport != null && rec.revisionReport.hasFailedChecks()) return false;
             if (rec.signers.isEmpty()) return false;
             for (SignerRecord signer : rec.signers) {
                 if (!signer.cryptoValid) return false;
@@ -1170,19 +1216,37 @@ public final class MainActivity extends AppCompatActivity {
         fp.setTextIsSelectable(true);
         panel.addView(fp);
 
-        new AlertDialog.Builder(this)
+        CheckBox verifyCheck = new CheckBox(this);
+        verifyCheck.setText("I have independently verified the SHA-256 fingerprint");
+        verifyCheck.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        verifyCheck.setTextColor(0xFF37474F);
+        addSpaceIn(panel, 12);
+        panel.addView(verifyCheck);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Trust Signer Certificate")
                 .setView(panel)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Trust Signer", (d, which) -> {
                     try {
-                        trustStore.trust(cert, true, "User trusted via PDF Validate");
+                        trustStore.trust(cert, verifyCheck.isChecked(), "User verified & trusted via PDF Validate");
                         toast("Certificate trusted locally.");
                         inspectPdf();
                     } catch (Exception e) {
                         toast("Could not trust certificate: " + safeMessage(e));
                     }
-                }).show();
+                }).create();
+
+        dialog.setOnShowListener(d -> {
+            Button posBtn = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            if (posBtn != null) {
+                posBtn.setEnabled(false);
+                verifyCheck.setOnCheckedChangeListener((btn, isChecked) -> {
+                    posBtn.setEnabled(isChecked);
+                });
+            }
+        });
+        dialog.show();
     }
 
     private void showCertificateDetails(SignatureRecord signatureRecord, SignerRecord signerRecord) {

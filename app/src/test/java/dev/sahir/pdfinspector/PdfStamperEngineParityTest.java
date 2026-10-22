@@ -26,15 +26,14 @@ public class PdfStamperEngineParityTest {
         Assert.assertNotNull("Form XObject must be generated", form);
 
         InputStream in = form.getCOSObject().createInputStream();
-        byte[] bytes = new byte[in.available()];
-        in.read(bytes);
+        byte[] bytes = PdfStamperEngine.readStreamBytes(in);
         String stream = new String(bytes, StandardCharsets.ISO_8859_1);
 
-        // Rule 3: Multi-layer structure (NEVER green only)
-        Assert.assertTrue("Must include white background underlay (1 1 1 rg ... h b)", stream.contains("1 1 1 rg") && stream.contains("h b"));
-        Assert.assertTrue("Must include black drop shadow (0 G 406 0 m ... h f)", stream.contains("0 G\n406 0 m") && stream.contains("h f"));
+        // Rule 3: Multi-layer structure (Shadow + Green Fill + Subtle Outline)
+        Assert.assertTrue("Must include black drop shadow (0 g 406 0 m ... h f)", stream.contains("0 g\n406 0 m") && stream.contains("h f"));
         Assert.assertTrue("Must include vibrant Adobe green fill (0 0.7 0.23 rg 377 50 m ... h f)", stream.contains("0 0.7 0.23 rg\n377 50 m") && stream.contains("h f"));
-        Assert.assertFalse("Must NOT include artificial bold black outer outline stroke (h S)", stream.contains("h S"));
+        Assert.assertTrue("Must include subtle outer outline stroke (0 G 0.35 w ... h S)", stream.contains("0 G\n0.35 w") && stream.contains("h S"));
+        Assert.assertFalse("Must NOT include extraneous white underlay (1 1 1 rg)", stream.contains("1 1 1 rg"));
 
         // Rule 2: Ground truth vertices from Adobe Acrobat DC DigSig.api (% DSDoubleValid)
         Assert.assertTrue("Stream must contain canonical right tip (787 967 l)", stream.contains("787 967 l"));
@@ -55,15 +54,14 @@ public class PdfStamperEngineParityTest {
         Assert.assertNotNull("Form XObject must be generated", form);
 
         InputStream in = form.getCOSObject().createInputStream();
-        byte[] bytes = new byte[in.available()];
-        in.read(bytes);
+        byte[] bytes = PdfStamperEngine.readStreamBytes(in);
         String stream = new String(bytes, StandardCharsets.ISO_8859_1);
 
         // Multi-layer structure
-        Assert.assertTrue("Compact checkmark must have white underlay", stream.contains("1 1 1 rg"));
-        Assert.assertTrue("Compact checkmark must have shadow", stream.contains("0 G\n406 0 m"));
-        Assert.assertTrue("Compact checkmark must have green fill", stream.contains("0 0.7 0.23 rg\n377 50 m"));
-        Assert.assertFalse("Compact checkmark must NOT have artificial outline stroke", stream.contains("h S"));
+        Assert.assertTrue("Compact checkmark must have shadow (0 g)", stream.contains("0 g\n406 0 m"));
+        Assert.assertTrue("Compact checkmark must have green fill (0 0.7 0.23 rg)", stream.contains("0 0.7 0.23 rg\n377 50 m"));
+        Assert.assertTrue("Compact checkmark must have subtle outline (0 G 0.35 w)", stream.contains("0 G\n0.35 w") && stream.contains("h S"));
+        Assert.assertFalse("Compact checkmark must NOT have white underlay", stream.contains("1 1 1 rg"));
 
         doc.close();
     }

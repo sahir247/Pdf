@@ -22,6 +22,7 @@ import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotation;
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget;
 import com.tom_roush.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import com.tom_roush.pdfbox.pdmodel.interactive.form.PDField;
+import com.tom_roush.pdfbox.pdmodel.interactive.form.PDSignatureField;
 import com.tom_roush.pdfbox.rendering.PDFRenderer;
 
 import java.io.ByteArrayInputStream;
@@ -152,6 +153,7 @@ public final class PdfPrintDocumentAdapter extends PrintDocumentAdapter {
         float cropH = crop.getHeight();
 
         for (PDField field : acroForm.getFields()) {
+            if (!(field instanceof PDSignatureField)) continue;
             for (PDAnnotationWidget widget : field.getWidgets()) {
                 boolean isOnThisPage = false;
                 if (widget.getPage() != null) {

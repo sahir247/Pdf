@@ -42,6 +42,12 @@ public final class PdfSignatureValidation {
             for (Check check : checks) if (check.state != State.PASS) pass = false;
             safeToAccept = pass;
         }
+        public boolean hasFailedChecks() {
+            for (Check check : checks) {
+                if (check.state == State.FAIL) return true;
+            }
+            return false;
+        }
         public String toString() {
             StringBuilder out = new StringBuilder();
             for (Check check : checks) {
