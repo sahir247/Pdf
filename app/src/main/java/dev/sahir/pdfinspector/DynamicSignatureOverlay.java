@@ -477,7 +477,8 @@ public final class DynamicSignatureOverlay {
                             String s = new String(bytes, StandardCharsets.ISO_8859_1);
                             Matcher mf = Pattern.compile("/F\\w+\\s+([\\d.]+)\\s+Tf").matcher(s);
                             if (mf.find()) {
-                                layout.titleFontSize = Float.parseFloat(mf.group(1));
+                                float fs = Float.parseFloat(mf.group(1));
+                                layout.titleFontSize = (fs <= 12.0f && layout.widgetHeight > 40f) ? 14.75f : fs;
                             }
                             Matcher mTm = Pattern.compile("1\\s+0\\s+0\\s+1\\s+([-\\d.]+)\\s+([-\\d.]+)\\s+Tm").matcher(s);
                             if (mTm.find()) {
@@ -505,8 +506,9 @@ public final class DynamicSignatureOverlay {
                                 float ly = Float.parseFloat(mLine.group(2));
                                 float lSize = mLine.group(3) != null ? Float.parseFloat(mLine.group(3)) : defFontSize;
                                 String text = mLine.group(4).trim();
-                                if (!text.isEmpty()) {
-                                    layout.lines.add(new AppearanceLayout.Line(text, lx, ly, lSize));
+                                if (!text.isEmpty() && !text.equalsIgnoreCase("IST")) {
+                                    float adjustedSize = (lSize <= 3.5f) ? 4.75f : lSize;
+                                    layout.lines.add(new AppearanceLayout.Line(text, lx, ly, adjustedSize));
                                 }
                             }
                         }

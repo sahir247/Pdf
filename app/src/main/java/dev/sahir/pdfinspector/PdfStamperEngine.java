@@ -246,9 +246,9 @@ public final class PdfStamperEngine {
                                 n4BBox = new PDRectangle(n4BBox.getLowerLeftX(), n4BBox.getLowerLeftY(), 65.0f, n4BBox.getHeight());
                                 n4Form.setBBox(n4BBox);
                             }
-                            float baseline = isCompact ? (n4BBox.getLowerLeftY() + 2.3f) : (n4BBox.getLowerLeftY() + h * 0.28f);
+                            float baseline = isCompact ? (n4BBox.getLowerLeftY() + 2.3f) : (n4BBox.getLowerLeftY() + (h >= 15.0f ? 4.28f : h * 0.28f));
                             float tx = isCompact ? 2.0f : 0.72f;
-                            float fontSize = isCompact ? 8.25f : Math.min(11.72f, Math.max(8.25f, h * 0.78f));
+                            float fontSize = isCompact ? 8.25f : (h >= 15.0f ? 14.75f : Math.max(8.25f, h * 0.78f));
 
                             String newN4Stream = String.format(java.util.Locale.US,
                                     "BT\n1 0 0 1 %.2f %.2f Tm\n/F1 %.2f Tf\n(Signature valid)Tj\nET\n",
@@ -277,6 +277,41 @@ public final class PdfStamperEngine {
                             fontsDict.setItem(COSName.getPDFName("F1"), helveticaDict);
 
                             changed = true;
+                        }
+                    } catch (Exception ignored) { }
+                }
+
+                // Check if this dictionary contains /n2 (the metadata text XObject)
+                COSName n2Key = COSName.getPDFName("n2");
+                if (xobjects.containsKey(n2Key)) {
+                    try {
+                        COSBase existingN2 = xobjects.getDictionaryObject(n2Key);
+                        if (existingN2 instanceof COSStream) {
+                            COSStream n2Stream = (COSStream) existingN2;
+                            String n2Content;
+                            try (InputStream in = n2Stream.createInputStream()) {
+                                n2Content = new String(in.readAllBytes(), StandardCharsets.ISO_8859_1);
+                            }
+                            String modN2 = n2Content;
+                            // 1. Strip spurious (IST) line completely in compact signatures (Aadhaar parity with authentic Adobe DC)
+                            if (modN2.contains("(IST)")) {
+                                modN2 = modN2.replaceAll("(?m)^\\s*1\\s+0\\s+0\\s+1\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+Tm\\s*\\(IST\\)Tj\\s*[\\r\\n]*", "");
+                                modN2 = modN2.replaceAll("\\(IST\\)Tj", "");
+                                modN2 = modN2.replaceAll("(?m)^\\s*\\(IST\\)Tj\\s*[\\r\\n]*", "");
+                            }
+                            // 2. Scale compact Aadhaar metadata text from 3.4pt to 4.25pt for exact 1:1 parity with Adobe DC
+                            if (modN2.contains("/F1 3.4 Tf") || modN2.contains("/F1 3.40 Tf")) {
+                                modN2 = modN2.replaceAll("/F1\\s+3\\.40?\\s+Tf", "/F1 4.75 Tf");
+                                modN2 = modN2.replaceAll("1 0 0 1 (\\d+(?:\\.\\d+)?) 12\\.2 Tm", "1 0 0 1 $1 11.8 Tm");
+                                modN2 = modN2.replaceAll("1 0 0 1 (\\d+(?:\\.\\d+)?) 8\\.8 Tm", "1 0 0 1 $1 8.0 Tm");
+                                modN2 = modN2.replaceAll("1 0 0 1 (\\d+(?:\\.\\d+)?) 5\\.41 Tm", "1 0 0 1 $1 4.2 Tm");
+                            }
+                            if (!modN2.equals(n2Content)) {
+                                try (OutputStream out = n2Stream.createOutputStream()) {
+                                    out.write(modN2.getBytes(StandardCharsets.ISO_8859_1));
+                                }
+                                changed = true;
+                            }
                         }
                     } catch (Exception ignored) { }
                 }
