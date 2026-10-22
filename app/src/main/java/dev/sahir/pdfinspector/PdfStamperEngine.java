@@ -255,9 +255,15 @@ public final class PdfStamperEngine {
         // In compact Aadhaar stamps, normalize title baseline from 23.3 to 19.0 to match Adobe DC uniform leading
         result = result.replaceAll("(\\d+(?:\\.\\d+)?)\\s+23\\.3\\s+Tm", "$1 19.0 Tm");
 
+        // In standard / income FRM streams, normalize /n1 Do invocation to 1:1 FRM coordinates
+        result = result.replaceAll("q\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+cm\\s+/n1\\s+Do\\s+Q", "q 1 0 0 1 0 0 cm /n1 Do Q");
+
         // Remove trailing timezone abbreviation line (e.g. IST) in compact stamps to match Adobe DC
         result = result.replaceAll("(?m)^\\s*1\\s+0\\s+0\\s+1\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+Tm\\s*\\(IST\\)Tj\\s*[\\r\\n]*", "");
         result = result.replaceAll("\\(IST\\)Tj", "");
+
+        // Inject Adobe CoolType tracking (0.15 Tc) into title stream for standard & compact stamps
+        result = result.replaceAll("(?m)(/F\\w+\\s+[\\d\\.]+\\s+Tf\\s*\\r?\\n?)(1\\s+0\\s+0\\s+1\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+Tm\\s*\\r?\\n?\\(Signature valid\\)Tj)", "$1 0.15 Tc $2 0 Tc");
 
         return result;
     }
@@ -301,24 +307,26 @@ public final class PdfStamperEngine {
         }
 
         // Standard / Banner stamps (e.g. Income Certificate 120x60 pt):
-        // Canonical Adobe Acrobat DigSig.api stream reverse-engineered from Adobe binary:
-        // Apex rests above 'Reason: D-Sign' and never touches 'Dist' / Line 5.
-        // Right tail terminates cleanly inside 'a' and 'l' of 'valid'.
-        form.setBBox(new PDRectangle(0, 0, width, height));
+        // Grounded in Adobe Acrobat DC:
+        // - Right arm cuts cleanly across 'a' of "valid", never touching 'd'
+        // - Apex rests directly over 'D' of 'Reason: D-Sign' (Y=11 pt), never touching 'Dist' / Line 5 (Y=2 pt)
+        // - Layer 1: Black 3D drop shadow (0 G)
+        // - Layer 2: Vibrant Adobe Green fill (0 0.7 0.23 rg)
+        // - Layer 3: Crisp black outer outline border stroke (0 G 1.0 w) - NEVER green only!
+        form.setBBox(new PDRectangle(0, 0, parentWidth, parentHeight));
 
         StringBuilder sb = new StringBuilder();
         sb.append("q\n");
-        sb.append("0.1 0 0 0.1 0 0 cm\n");
         sb.append("1 J 1 j 4 M [] 0 d\n");
-        // Layer 1: White border outline for separation from underlying text (2.4pt)
-        sb.append("1 1 1 rg 1 1 1 RG 24 w\n");
-        sb.append("370 37 m 0 401 l 126 574 l 365 289 l 779 1000 l 944 876 l h b\n");
-        // Layer 2: Black 3D drop shadow extruded down-right
+        // Layer 1: Black 3D drop shadow extruded down-right
         sb.append("0 G\n");
-        sb.append("406 0 m 55 349 l 157 485 l 396 200 l 817 916 l 963 808 l h f\n");
-        // Layer 3: Vibrant Adobe Green fill
+        sb.append("44.00 8.50 m 25.50 25.00 l 31.00 31.50 l 43.50 18.00 l 68.00 52.50 l 74.50 46.50 l h f\n");
+        // Layer 2: Vibrant Adobe Green fill
         sb.append("0 0.7 0.23 rg\n");
-        sb.append("377 50 m 25 399 l 128 536 l 367 251 l 787 967 l 934 859 l h f\n");
+        sb.append("42.50 11.00 m 24.00 27.50 l 29.50 34.00 l 42.00 20.50 l 66.50 55.00 l 73.00 49.00 l h f\n");
+        // Layer 3: Crisp black outer outline border stroke (1.0 w)
+        sb.append("0 G 1.0 w\n");
+        sb.append("42.50 11.00 m 24.00 27.50 l 29.50 34.00 l 42.00 20.50 l 66.50 55.00 l 73.00 49.00 l h S\n");
         sb.append("Q\n");
 
         try (OutputStream out = form.getCOSObject().createOutputStream()) {

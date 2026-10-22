@@ -98,28 +98,9 @@ public final class DynamicSignatureOverlay {
      */
     public static void init(Context context) {
         if (context == null) return;
-        if (sBoldTypeface == null) {
-            try {
-                sBoldTypeface = Typeface.createFromAsset(context.getAssets(), "fonts/Helvetica-Bold.ttf");
-            } catch (Exception e1) {
-                try {
-                    sBoldTypeface = Typeface.createFromAsset(context.getAssets(), "fonts/MyriadPro-Bold.otf");
-                } catch (Exception e2) {
-                    sBoldTypeface = Typeface.create("sans-serif", Typeface.BOLD);
-                }
-            }
-        }
-        if (sRegularTypeface == null) {
-            try {
-                sRegularTypeface = Typeface.createFromAsset(context.getAssets(), "fonts/Helvetica-Regular.ttf");
-            } catch (Exception e1) {
-                try {
-                    sRegularTypeface = Typeface.createFromAsset(context.getAssets(), "fonts/MyriadPro-Regular.otf");
-                } catch (Exception e2) {
-                    sRegularTypeface = Typeface.create("sans-serif", Typeface.NORMAL);
-                }
-            }
-        }
+        AdobeCoolTypeEngine.init(context);
+        sBoldTypeface = AdobeCoolTypeEngine.getBoldTypeface();
+        sRegularTypeface = AdobeCoolTypeEngine.getRegularTypeface();
     }
 
     public static Typeface getBoldTypeface() {
@@ -199,22 +180,8 @@ public final class DynamicSignatureOverlay {
         float checkSize = 2.90f * titleFontSize;
         float checkScale = checkSize / 100.0f;
 
-        // Dynamic tip X calculation: anchor inside 'a' of "valid" if present, or ~68% along title
-        float tipX;
-        String text = titleText != null ? titleText : "Signature valid";
-        String lower = text.toLowerCase(Locale.ROOT);
-        int validIdx = lower.indexOf("valid");
-        if (validIdx >= 0) {
-            float prefixWidth = titlePaint.measureText(text.substring(0, validIdx));
-            float vWidth = titlePaint.measureText(text.substring(validIdx, Math.min(validIdx + 1, text.length())));
-            float aWidth = (validIdx + 1 < text.length())
-                    ? titlePaint.measureText(text.substring(validIdx + 1, Math.min(validIdx + 2, text.length())))
-                    : titleFontSize * 0.55f;
-            tipX = titleX + prefixWidth + vWidth + 0.30f * aWidth;
-        } else {
-            float fullWidth = titlePaint.measureText(text);
-            tipX = titleX + 0.68f * fullWidth;
-        }
+        // Dynamic tip X calculation grounded in AdobeCoolTypeEngine: anchor cleanly inside 'a' of "valid", never 'd'
+        float tipX = AdobeCoolTypeEngine.calculateAnchorInsideAOfValid(titleText, titleX, titleFontSize);
 
         // Tip Y: 0.48 * fontSize above baseline
         float tipY = titleBaselineY - 0.48f * titleFontSize;
