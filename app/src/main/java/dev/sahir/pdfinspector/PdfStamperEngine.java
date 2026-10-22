@@ -172,17 +172,25 @@ public final class PdfStamperEngine {
         if (resources != null) {
             COSDictionary xobjects = (COSDictionary) resources.getCOSObject().getDictionaryObject(COSName.XOBJECT);
             if (xobjects != null) {
-                // Check if this dictionary contains /n4 (title) and expand BBox if needed
+                // Update /n4 font to Helvetica-Bold if present
                 COSName n4Key = COSName.getPDFName("n4");
                 if (xobjects.containsKey(n4Key)) {
                     COSBase existingN4 = xobjects.getDictionaryObject(n4Key);
                     if (existingN4 instanceof COSStream) {
                         try {
                             PDAppearanceStream n4Stream = new PDAppearanceStream((COSStream) existingN4);
-                            PDRectangle n4BBox = n4Stream.getBBox();
-                            if (n4BBox != null && n4BBox.getWidth() <= 65f) {
-                                n4Stream.setBBox(new PDRectangle(0, 0, n4BBox.getWidth(), Math.max(30f, n4BBox.getHeight())));
-                                changed = true;
+                            PDResources n4Res = n4Stream.getResources();
+                            if (n4Res != null) {
+                                COSDictionary n4Fonts = (COSDictionary) n4Res.getCOSObject().getDictionaryObject(COSName.FONT);
+                                if (n4Fonts != null) {
+                                    for (COSName fKey : n4Fonts.keySet()) {
+                                        COSBase fObj = n4Fonts.getDictionaryObject(fKey);
+                                        if (fObj instanceof COSDictionary) {
+                                            ((COSDictionary) fObj).setName(COSName.BASE_FONT, "Helvetica-Bold");
+                                            changed = true;
+                                        }
+                                    }
+                                }
                             }
                         } catch (Exception ignored) { }
                     }
@@ -252,19 +260,6 @@ public final class PdfStamperEngine {
         Pattern twoToken = Pattern.compile("\\(\\s*Signature\\s+Not\\s*\\)[\\s\\r\\n]*\\(\\s*Verified\\s*\\)", Pattern.CASE_INSENSITIVE);
         result = twoToken.matcher(result).replaceAll("(Signature valid) ()");
 
-        // In compact Aadhaar stamps, normalize title baseline from 23.3 to 19.0 to match Adobe DC uniform leading
-        result = result.replaceAll("(\\d+(?:\\.\\d+)?)\\s+23\\.3\\s+Tm", "$1 19.0 Tm");
-
-        // In standard / income FRM streams, normalize /n1 Do invocation to 1:1 FRM coordinates
-        result = result.replaceAll("q\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+cm\\s+/n1\\s+Do\\s+Q", "q 1 0 0 1 0 0 cm /n1 Do Q");
-
-        // Remove trailing timezone abbreviation line (e.g. IST) in compact stamps to match Adobe DC
-        result = result.replaceAll("(?m)^\\s*1\\s+0\\s+0\\s+1\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+Tm\\s*\\(IST\\)Tj\\s*[\\r\\n]*", "");
-        result = result.replaceAll("\\(IST\\)Tj", "");
-
-        // Inject Adobe CoolType tracking (0.15 Tc) into title stream for standard & compact stamps
-        result = result.replaceAll("(?m)(/F\\w+\\s+[\\d\\.]+\\s+Tf\\s*\\r?\\n?)(1\\s+0\\s+0\\s+1\\s+[\\d\\.]+\\s+[\\d\\.]+\\s+Tm\\s*\\r?\\n?\\(Signature valid\\)Tj)", "$1 0.15 Tc $2 0 Tc");
-
         return result;
     }
 
@@ -290,81 +285,37 @@ public final class PdfStamperEngine {
      * - Bottom apex hovers cleanly above the bottom metadata line, NEVER touching "Dist" or "Location"
      * - Left wing leaves the top metadata line ('Digitally Signed.') 100% visible and untouched
      */
-    private static PDFormXObject createAdobeGreenCheckmarkForm(PDDocument document, float width, float height, float parentWidth, float parentHeight) throws Exception {
+    /**
+     * Creates a PDFormXObject representing the verified green checkmark vector icon
+     * using the canonical vector stream disassembled from Adobe Acrobat DC's DigSig.api (offset 0x110e10, % DSDoubleValid).
+     *
+     * Layer 1: White protective underlay with delicate border (1 1 1 rg 1 1 1 RG 24 w ... h b)
+     * Layer 2: Deep black drop shadow extruded down-right (0 G 406 0 m ... h f)
+     * Layer 3: Vibrant Adobe green fill (0 0.7 0.23 rg 377 50 m ... h f)
+     *
+     * Strictly NO artificial bold black stroke outline (0 G ... w ... h S) enclosing the shape.
+     */
+    private static PDFormXObject createAdobeGreenCheckmarkForm(PDDocument document, float width, float height) throws Exception {
         PDFormXObject form = new PDFormXObject(document);
 
-        float pw = parentWidth > 0 ? parentWidth : (width > 0 ? width : 120f);
-        float ph = parentHeight > 0 ? parentHeight : (height > 0 ? height : 60f);
-        float aspect = pw / ph;
+        float w = width > 0 ? width : 100f;
+        float h = height > 0 ? height : 100f;
+        form.setBBox(new PDRectangle(0, 0, w, h));
 
-        // Continuous interpolation factor t in [0 .. 1] between compact (<= 1.5) and wide banner (>= 2.0)
-        float t = Math.max(0f, Math.min(1f, (aspect - 1.5f) / 0.5f));
-
-        // Dynamic checkmark height and width
-        float checkH = ((1.0f - t) * 0.82f + t * 0.7333f) * ph;
-        float checkW = checkH * ((1.0f - t) * 1.05f + t * 1.1136f);
-
-        // Dynamic apex Y:
-        // In banner stamps, apex rests at 0.1833 * ph (11pt in 60pt widget, hovering 9pt above Line 5 "Dist" / Location)
-        // In compact stamps, apex rests at 0.033 * ph (touching '2' of 2026 on Line 4 Date)
-        float checkY = ((1.0f - t) * 0.033f + t * 0.1833f) * ph;
-
-        // Dynamic right tip X:
-        // Anchored inside letter 'a' of "valid" via AdobeCoolTypeEngine metrics, never touching 'd'
-        float titleFontSize = ((1.0f - t) * 0.1567f + t * 0.1953f) * ph;
-        float titleX = 2.0f;
-        float bannerAnchorX = AdobeCoolTypeEngine.calculateAnchorInsideAOfValid("Signature valid", titleX, titleFontSize);
-        float compactAnchorX = titleX + 4.2f * titleFontSize;
-        float anchorX = (1.0f - t) * compactAnchorX + t * bannerAnchorX;
-
-        // For compact stamps, apex is anchored to Date '2' of 2026, for banner it is anchored to 'a'
-        float compactCheckX = 1.60f;
-        float bannerCheckX = anchorX - checkW;
-        float checkX = (1.0f - t) * compactCheckX + t * bannerCheckX;
-
-        // Adjust BBox for form
-        if (aspect < 1.8f) {
-            form.setBBox(new PDRectangle(-60, -20, Math.max(100, pw + 60), Math.max(100, ph + 20)));
-        } else {
-            form.setBBox(new PDRectangle(0, 0, pw, ph));
-        }
-
-        // Generate the 6 canonical checkmark vertices dynamically
-        float[][] pts = new float[6][2];
-        for (int i = 0; i < 6; i++) {
-            pts[i][0] = checkX + NORM_U[i] * checkW;
-            pts[i][1] = checkY + NORM_V[i] * checkH;
-        }
-
-        // Drop shadow offset (+0.03 * W, -0.05 * H)
-        float dxShadow = 0.03f * checkW;
-        float dyShadow = -0.05f * checkH;
-        float strokeW = Math.max(0.85f, 0.022f * checkH);
+        float sx = w / 1000.0f;
+        float sy = h / 1000.0f;
 
         StringBuilder sb = new StringBuilder();
         sb.append("q\n");
+        sb.append(String.format(Locale.ROOT, "%.4f 0 0 %.4f 0 0 cm\n", sx, sy));
         sb.append("1 J 1 j 4 M [] 0 d\n");
-
-        // Layer 1: Black 3D drop shadow extruded down-right
+        sb.append("1.5 i\n");
+        sb.append("1 1 1 rg 1 1 1 RG 24 w\n");
+        sb.append("370 37 m 0 401 l 126 574 l 365 289 l 779 1000 l 944 876 l h b\n");
         sb.append("0 G\n");
-        for (int i = 0; i < 6; i++) {
-            sb.append(String.format(Locale.ROOT, "%.2f %.2f %s ", pts[i][0] + dxShadow, pts[i][1] + dyShadow, (i == 0 ? "m" : "l")));
-        }
-        sb.append("h f\n");
-
-        // Layer 2: Vibrant Adobe Green fill (#00B33B)
+        sb.append("406 0 m 55 349 l 157 485 l 396 200 l 817 916 l 963 808 l h f\n");
         sb.append("0 0.7 0.23 rg\n");
-        for (int i = 0; i < 6; i++) {
-            sb.append(String.format(Locale.ROOT, "%.2f %.2f %s ", pts[i][0], pts[i][1], (i == 0 ? "m" : "l")));
-        }
-        sb.append("h f\n");
-
-        // Layer 3: Crisp black outer outline border stroke (NEVER green only!)
-        sb.append(String.format(Locale.ROOT, "0 G %.2f w\n", strokeW));
-        for (int i = 0; i < 6; i++) {
-            sb.append(String.format(Locale.ROOT, "%.2f %.2f %s ", pts[i][0], pts[i][1], (i == 0 ? "m" : "l")));
-        }
-        sb.append("h S\n");
+        sb.append("377 50 m 25 399 l 128 536 l 367 251 l 787 967 l 934 859 l h f\n");
         sb.append("Q\n");
 
         try (OutputStream out = form.getCOSObject().createOutputStream()) {
@@ -372,6 +323,10 @@ public final class PdfStamperEngine {
         }
 
         return form;
+    }
+
+    private static PDFormXObject createAdobeGreenCheckmarkForm(PDDocument document, float width, float height, float parentWidth, float parentHeight) throws Exception {
+        return createAdobeGreenCheckmarkForm(document, width, height);
     }
 
     /**

@@ -80,9 +80,9 @@ public final class DynamicSignatureOverlay {
             {94.4f, 12.4f}
     };
 
-    // Centroid of the bounding box [2.5, 93.4] x [3.3, 95.0]
-    private static final float BBOX_CENTER_X = 47.95f;
-    private static final float BBOX_CENTER_Y = 49.15f;
+    // Canonical center of unit [0 .. 100] coordinate grid
+    private static final float BBOX_CENTER_X = 50.0f;
+    private static final float BBOX_CENTER_Y = 50.0f;
 
     // Mathematical vector from checkmark centroid to the top tip (78.7f, 3.3f)
     private static final float TIP_OFFSET_DX = 78.7f - BBOX_CENTER_X; // +30.75f
@@ -242,29 +242,17 @@ public final class DynamicSignatureOverlay {
         titlePaint.setTextSize(canvasTitleSize);
 
         float titleX = bounds.left + (layout.titleX >= 0 ? layout.titleX : 2.0f) * scaleX;
-        float effectiveTitleY = (layout.titleY >= 0 ? layout.titleY : 23.3f);
-        if (widgetW <= 65f && !layout.lines.isEmpty()) {
-            // In compact stamps (e.g. Aadhaar), Adobe DC sets uniform leading: 1 step above Line 1
-            effectiveTitleY = layout.lines.get(0).y + 3.4f;
-        }
-        float titleY = bounds.bottom - effectiveTitleY * scaleY;
+        float titleY = bounds.bottom - (layout.titleY >= 0 ? layout.titleY : widgetH * 0.77f) * scaleY;
         String titleText = "Signature valid";
 
         // 3. Draw Adobe green checkmark vector using exact stream matrix or dynamic typography
         float checkCx, checkCy, checkSize;
-        if (widgetW <= 65f) {
-            // Compact stamp (e.g. Aadhaar 50x30 pt): Checkmark apex touches '2' of '2026'
-            float cxPdf = 11.7f;
-            float cyPdf = 14.0f;
-            float sizePdf = 18.0f;
-            checkCx = bounds.left + cxPdf * scaleX;
-            checkCy = bounds.bottom - cyPdf * scaleY;
-            checkSize = sizePdf * scaleY;
-        } else if (layout.n1Scale > 0) {
-            // Standard banner stamp (e.g. Income Certificate): Apex at Y=30.52 (above Reason/Location)
-            float cxPdf = layout.n1Tx + 41.0f * layout.n1Scale;
-            float cyPdf = layout.n1Ty + 61.0f * layout.n1Scale;
-            float sizePdf = 95.0f * layout.n1Scale;
+        if (layout.n1Scale > 0) {
+            // Universal formula for all PDFs with /FRM stream matrix:
+            // /n1 has canonical BBox [0, 0, 100, 100], center is (50, 50)
+            float cxPdf = layout.n1Tx + 50.0f * layout.n1Scale;
+            float cyPdf = layout.n1Ty + 50.0f * layout.n1Scale;
+            float sizePdf = 100.0f * layout.n1Scale;
             checkCx = bounds.left + cxPdf * scaleX;
             checkCy = bounds.bottom - cyPdf * scaleY;
             checkSize = sizePdf * scaleY;
@@ -285,9 +273,6 @@ public final class DynamicSignatureOverlay {
         detailPaint.setTypeface(getRegularTypeface());
 
         for (AppearanceLayout.Line line : layout.lines) {
-            if (widgetW <= 65f && "IST".equalsIgnoreCase(line.text.trim())) {
-                continue; // Suppress timezone abbreviation line in compact stamps to match Adobe DC
-            }
             float lineSize = line.fontSize * scaleY;
             detailPaint.setTextSize(lineSize);
             float lx = bounds.left + line.x * scaleX;
@@ -415,15 +400,8 @@ public final class DynamicSignatureOverlay {
         fillPaint.setStyle(Paint.Style.FILL);
         canvas.drawPath(greenPath, fillPaint);
 
-        // 4. Black outer stroke outline (15 w in 1000-grid = 1.5% of size)
-        float strokeWidth = Math.max(1.0f, 1.5f * scale);
-        Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        strokePaint.setColor(Color.BLACK);
-        strokePaint.setStyle(Paint.Style.STROKE);
-        strokePaint.setStrokeWidth(strokeWidth);
-        strokePaint.setStrokeJoin(Paint.Join.MITER);
-        strokePaint.setStrokeCap(Paint.Cap.SQUARE);
-        canvas.drawPath(greenPath, strokePaint);
+        // In Adobe Acrobat DC (% DSDoubleValid), the green checkmark is filled with vibrant green (#00A128)
+        // and shadowed by the layer underneath, with strictly no heavy cartoon black outline.
     }
 
     private static void buildAdobeVectorPath(Path path, float[][] pts, float cx, float cy, float scale) {

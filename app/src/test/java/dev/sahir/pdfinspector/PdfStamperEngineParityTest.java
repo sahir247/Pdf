@@ -31,17 +31,14 @@ public class PdfStamperEngineParityTest {
         String stream = new String(bytes, StandardCharsets.ISO_8859_1);
 
         // Rule 3: Multi-layer structure (NEVER green only)
-        Assert.assertTrue("Must include black drop shadow (0 G ... h f)", stream.contains("0 G\n") && stream.contains("h f"));
-        Assert.assertTrue("Must include vibrant Adobe green fill (0 0.7 0.23 rg)", stream.contains("0 0.7 0.23 rg\n"));
-        Assert.assertTrue("Must include crisp black outer outline stroke (0 G ... w ... h S)", stream.contains("w\n") && stream.contains("h S"));
+        Assert.assertTrue("Must include white background underlay (1 1 1 rg ... h b)", stream.contains("1 1 1 rg") && stream.contains("h b"));
+        Assert.assertTrue("Must include black drop shadow (0 G 406 0 m ... h f)", stream.contains("0 G\n406 0 m") && stream.contains("h f"));
+        Assert.assertTrue("Must include vibrant Adobe green fill (0 0.7 0.23 rg 377 50 m ... h f)", stream.contains("0 0.7 0.23 rg\n377 50 m") && stream.contains("h f"));
+        Assert.assertFalse("Must NOT include artificial bold black outer outline stroke (h S)", stream.contains("h S"));
 
-        // Rule 2: Right arm overlap inside 'a' of valid, NEVER touching 'd'
-        Assert.assertTrue("Stream must contain right arm terminating inside 'a' (<= 75 pt)",
-                stream.contains("55.00 l") || stream.contains("54.99 l") || stream.contains("48.99 l"));
-
-        // Rule 2: Apex placement above Line 5 "Dist" / Location (Y=2 pt)
-        Assert.assertTrue("Stream must contain apex hovering at Y=11 pt above Dist",
-                stream.contains("11.00 m") || stream.contains("11.00 l"));
+        // Rule 2: Ground truth vertices from Adobe Acrobat DC DigSig.api (% DSDoubleValid)
+        Assert.assertTrue("Stream must contain canonical right tip (787 967 l)", stream.contains("787 967 l"));
+        Assert.assertTrue("Stream must contain canonical apex (377 50 m)", stream.contains("377 50 m"));
 
         doc.close();
     }
@@ -63,9 +60,10 @@ public class PdfStamperEngineParityTest {
         String stream = new String(bytes, StandardCharsets.ISO_8859_1);
 
         // Multi-layer structure
-        Assert.assertTrue("Compact checkmark must have shadow", stream.contains("0 G\n"));
-        Assert.assertTrue("Compact checkmark must have green fill", stream.contains("0 0.7 0.23 rg\n"));
-        Assert.assertTrue("Compact checkmark must have outline stroke", stream.contains("h S"));
+        Assert.assertTrue("Compact checkmark must have white underlay", stream.contains("1 1 1 rg"));
+        Assert.assertTrue("Compact checkmark must have shadow", stream.contains("0 G\n406 0 m"));
+        Assert.assertTrue("Compact checkmark must have green fill", stream.contains("0 0.7 0.23 rg\n377 50 m"));
+        Assert.assertFalse("Compact checkmark must NOT have artificial outline stroke", stream.contains("h S"));
 
         doc.close();
     }
