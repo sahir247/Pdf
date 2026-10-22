@@ -202,5 +202,15 @@ public class SignatureIntegrityTest {
             java.nio.file.Files.write(new File(scratchDir, "eaadhaar_app_printable.pdf").toPath(), res.printablePdf);
             System.out.println("Saved eaadhaar_app_rectified.pdf (" + res.rectifiedPdf.length + " bytes)");
         }
+
+        // Ration PDF
+        File rationFile = new File(scratchDir, "ration.pdf");
+        if (rationFile.exists()) {
+            byte[] bytes = java.nio.file.Files.readAllBytes(rationFile.toPath());
+            PdfStamperEngine.StampResult res = PdfStamperEngine.processPdf(bytes, null);
+            java.nio.file.Files.write(new File(scratchDir, "ration_app_rectified.pdf").toPath(), res.rectifiedPdf);
+            java.nio.file.Files.write(new File(scratchDir, "ration_app_printable.pdf").toPath(), res.printablePdf);
+            System.out.println("Saved ration_app_rectified.pdf (" + res.rectifiedPdf.length + " bytes)");
+        }
     }
 }

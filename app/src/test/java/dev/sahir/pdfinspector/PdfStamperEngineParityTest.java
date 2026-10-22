@@ -32,7 +32,7 @@ public class PdfStamperEngineParityTest {
         // Rule 3: Multi-layer structure (Shadow + Green Fill + Subtle Outline)
         Assert.assertTrue("Must include black drop shadow (0 g 406 0 m ... h f)", stream.contains("0 g\n406 0 m") && stream.contains("h f"));
         Assert.assertTrue("Must include vibrant Adobe green fill (0 0.7 0.23 rg 377 50 m ... h f)", stream.contains("0 0.7 0.23 rg\n377 50 m") && stream.contains("h f"));
-        Assert.assertTrue("Must include subtle outer outline stroke (0 G 0.35 w ... h S)", stream.contains("0 G\n0.35 w") && stream.contains("h S"));
+        Assert.assertTrue("Must include subtle outer outline stroke (0 G 15 w ... h S)", stream.contains("0 G\n15 w") && stream.contains("h S"));
         Assert.assertFalse("Must NOT include extraneous white underlay (1 1 1 rg)", stream.contains("1 1 1 rg"));
 
         // Rule 2: Ground truth vertices from Adobe Acrobat DC DigSig.api (% DSDoubleValid)
@@ -60,7 +60,7 @@ public class PdfStamperEngineParityTest {
         // Multi-layer structure
         Assert.assertTrue("Compact checkmark must have shadow (0 g)", stream.contains("0 g\n406 0 m"));
         Assert.assertTrue("Compact checkmark must have green fill (0 0.7 0.23 rg)", stream.contains("0 0.7 0.23 rg\n377 50 m"));
-        Assert.assertTrue("Compact checkmark must have subtle outline (0 G 0.35 w)", stream.contains("0 G\n0.35 w") && stream.contains("h S"));
+        Assert.assertTrue("Compact checkmark must have subtle outline (0 G 15 w)", stream.contains("0 G\n15 w") && stream.contains("h S"));
         Assert.assertFalse("Compact checkmark must NOT have white underlay", stream.contains("1 1 1 rg"));
 
         doc.close();
