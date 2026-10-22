@@ -18,6 +18,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import android.graphics.PorterDuff;
+import android.graphics.drawable.Drawable;
+import androidx.core.content.ContextCompat;
 
 import java.io.InputStream;
 import java.security.cert.CertificateFactory;
@@ -155,7 +158,7 @@ public final class TrustManagementActivity extends AppCompatActivity {
                 TextView fpView = text("SHA-256: " + fp, 10, false, 0xFF94A3B8);
                 item.addView(fpView);
 
-                Button removeBtn = styledButton("Remove Trust", 0xFFD32F2F, 0xFFFFFFFF);
+                Button removeBtn = styledButton("Remove Trust", R.drawable.ic_delete, 0xFFD32F2F, 0xFFFFFFFF);
                 removeBtn.setTextSize(12);
                 removeBtn.setOnClickListener(v -> confirmRemoveTrust(fp, name));
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -204,7 +207,7 @@ public final class TrustManagementActivity extends AppCompatActivity {
                 TextView nameView = text("CA: " + caName, 13, true, 0xFF0F172A);
                 item.addView(nameView);
 
-                Button removeBtn = styledButton("Remove CA", 0xFFD32F2F, 0xFFFFFFFF);
+                Button removeBtn = styledButton("Remove CA", R.drawable.ic_delete, 0xFFD32F2F, 0xFFFFFFFF);
                 removeBtn.setTextSize(12);
                 removeBtn.setOnClickListener(v -> {
                     trustStore.removeTrustedCertificateAuthority(fp);
@@ -223,7 +226,7 @@ public final class TrustManagementActivity extends AppCompatActivity {
         }
 
         addSpaceIn(card, 12);
-        Button importBtn = styledButton("+ Import CA Certificate (.cer, .crt, .pem)", 0xFF1565C0, 0xFFFFFFFF);
+        Button importBtn = styledButton("Import CA Certificate (.cer, .crt, .pem)", R.drawable.ic_add, 0xFF1565C0, 0xFFFFFFFF);
         importBtn.setOnClickListener(v -> chooseCaFile());
         card.addView(importBtn);
 
@@ -333,15 +336,31 @@ public final class TrustManagementActivity extends AppCompatActivity {
         return card;
     }
 
-    private Button styledButton(String label, int bgColor, int textColor) {
+    private Button styledButton(String label, int iconResId, int bgColor, int textColor) {
         Button btn = new Button(this);
         btn.setText(label);
         btn.setTextColor(textColor);
         btn.setTextSize(13);
         btn.setTypeface(Typeface.DEFAULT_BOLD);
+        btn.setAllCaps(false);
         btn.setBackground(roundBg(bgColor, 0, dp(8)));
         btn.setPadding(dp(14), dp(10), dp(14), dp(10));
+        if (iconResId != 0) {
+            Drawable icon = ContextCompat.getDrawable(this, iconResId);
+            if (icon != null) {
+                icon = icon.mutate();
+                icon.setColorFilter(textColor, PorterDuff.Mode.SRC_IN);
+                int size = dp(18);
+                icon.setBounds(0, 0, size, size);
+                btn.setCompoundDrawables(icon, null, null, null);
+                btn.setCompoundDrawablePadding(dp(8));
+            }
+        }
         return btn;
+    }
+
+    private Button styledButton(String label, int bgColor, int textColor) {
+        return styledButton(label, 0, bgColor, textColor);
     }
 
     private TextView text(String content, float sp, boolean bold, int color) {

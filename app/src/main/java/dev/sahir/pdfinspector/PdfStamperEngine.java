@@ -38,7 +38,7 @@ import java.util.regex.Pattern;
 /**
  * Native PDFBox engine for signature appearance rectification and flattening.
  *
- * ⚠️ CRYPTOGRAPHIC INTEGRITY & SERIALIZATION ARCHITECTURE NOTE:
+ *  CRYPTOGRAPHIC INTEGRITY & SERIALIZATION ARCHITECTURE NOTE:
  * When PDFBox loads a document and calls {@code document.save(out)}, it serializes
  * a newly constructed PDF byte stream with rebuilt cross-reference tables, object IDs,
  * and stream lengths. Consequently, the original cryptographic ByteRange and CMS

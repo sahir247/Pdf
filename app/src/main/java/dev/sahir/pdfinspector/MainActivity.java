@@ -37,6 +37,9 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
+import android.graphics.PorterDuff;
+import android.graphics.drawable.Drawable;
+import androidx.core.content.ContextCompat;
 
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
 import com.tom_roush.pdfbox.pdmodel.PDDocument;
@@ -216,7 +219,7 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout pickerCard = createCard();
         pickerCard.setPadding(dp(16), dp(16), dp(16), dp(16));
 
-        Button pickBtn = styledButton("📂 Choose PDF Document", 0xFF1976D2, 0xFFFFFFFF);
+        Button pickBtn = styledButton("Choose PDF Document", R.drawable.ic_folder_open, 0xFF1976D2, 0xFFFFFFFF);
         pickBtn.setOnClickListener(v -> choosePdf());
         pickerCard.addView(pickBtn);
 
@@ -229,8 +232,12 @@ public final class MainActivity extends AppCompatActivity {
             emptyCard.setGravity(Gravity.CENTER_HORIZONTAL);
             emptyCard.setPadding(dp(24), dp(32), dp(24), dp(32));
 
-            TextView emptyIcon = text("📄", 42, false, 0xFF90A4AE);
-            emptyIcon.setGravity(Gravity.CENTER);
+                        ImageView emptyIcon = new ImageView(this);
+            emptyIcon.setImageResource(R.drawable.ic_pdf_file);
+            emptyIcon.setColorFilter(0xFF90A4AE, PorterDuff.Mode.SRC_IN);
+            LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(dp(56), dp(56));
+            iconLp.gravity = Gravity.CENTER_HORIZONTAL;
+            emptyIcon.setLayoutParams(iconLp);
             emptyCard.addView(emptyIcon);
             addSpaceIn(emptyCard, 8);
 
@@ -272,33 +279,56 @@ public final class MainActivity extends AppCompatActivity {
         String statusTitle;
         String statusSubtitle;
 
+                int statusIconRes;
         if (records.isEmpty()) {
             overallStatusColor = 0xFF546E7A;
             statusBgColor = 0xFFECEFF1;
-            statusTitle = "ℹ️ NO DIGITAL SIGNATURE DETECTED";
+            statusIconRes = R.drawable.ic_info;
+            statusTitle = "NO DIGITAL SIGNATURE DETECTED";
             statusSubtitle = "This document does not contain embedded cryptographic signature dictionaries. Visual stamps are not digital signatures.";
         } else if (isDocumentTampered()) {
             overallStatusColor = 0xFFC62828;
             statusBgColor = 0xFFFFEBEE;
-            statusTitle = "❌ SIGNATURE TAMPERED / INVALID";
+            statusIconRes = R.drawable.ic_error_circle;
+            statusTitle = "SIGNATURE TAMPERED / INVALID";
             statusSubtitle = "Document failed cryptographic mathematical verification or byte ranges were modified after signing. Stamping or exporting tampered documents is strictly blocked.";
         } else if (isDocumentCryptographicallyValid()) {
             overallStatusColor = 0xFF2E7D32;
             statusBgColor = 0xFFE8F5E9;
-            statusTitle = "✓ SIGNATURE VERIFIED (TRUSTED)";
+            statusIconRes = R.drawable.ic_check_circle;
+            statusTitle = "SIGNATURE VERIFIED (TRUSTED)";
             statusSubtitle = "CMS digital signature verified and chains to a trusted root authority (CCA India PKI / System CA / Pinned Signer).";
         } else {
             overallStatusColor = 0xFFE65100;
             statusBgColor = 0xFFFFF3E0;
-            statusTitle = "⚠️ SIGNATURE VALID (UNTRUSTED ROOT)";
+            statusIconRes = R.drawable.ic_warning;
+            statusTitle = "SIGNATURE VALID (UNTRUSTED ROOT)";
             statusSubtitle = "Signature mathematics is valid, but the certificate does not chain to a pre-trusted root authority. Tap the certificate icon in the top right or add to trusted.";
         }
 
         statusCard.setBackground(roundBg(statusBgColor, overallStatusColor, dp(12)));
         statusCard.setPadding(dp(18), dp(18), dp(18), dp(18));
 
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        ImageView iconView = new ImageView(this);
+        Drawable statusDrawable = ContextCompat.getDrawable(this, statusIconRes);
+        if (statusDrawable != null) {
+            statusDrawable = statusDrawable.mutate();
+            statusDrawable.setColorFilter(overallStatusColor, PorterDuff.Mode.SRC_IN);
+            iconView.setImageDrawable(statusDrawable);
+        }
+        int iconSize = dp(22);
+        LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(iconSize, iconSize);
+        iconLp.setMargins(0, 0, dp(10), 0);
+        titleRow.addView(iconView, iconLp);
+
         TextView titleView = text(statusTitle, 16, true, overallStatusColor);
-        statusCard.addView(titleView);
+        titleRow.addView(titleView);
+
+        statusCard.addView(titleRow);
         addSpaceIn(statusCard, 6);
 
         TextView subView = text(statusSubtitle, 13, false, 0xFF37474F);
@@ -316,11 +346,29 @@ public final class MainActivity extends AppCompatActivity {
         previewCard.addView(secTitle);
         addSpaceIn(previewCard, 8);
 
-        if (isDocumentCryptographicallyValid()) {
-            TextView badge = text("✓ Dynamic Verification Active • Original Signed Bytes 100% Intact", 12, true, 0xFF2E7D32);
-            badge.setBackground(roundBg(0xFFE8F5E9, 0xFF81C784, dp(6)));
-            badge.setPadding(dp(10), dp(6), dp(10), dp(6));
-            previewCard.addView(badge);
+                if (isDocumentCryptographicallyValid()) {
+            LinearLayout badgeRow = new LinearLayout(this);
+            badgeRow.setOrientation(LinearLayout.HORIZONTAL);
+            badgeRow.setGravity(Gravity.CENTER_VERTICAL);
+            badgeRow.setBackground(roundBg(0xFFE8F5E9, 0xFF81C784, dp(6)));
+            badgeRow.setPadding(dp(10), dp(6), dp(10), dp(6));
+
+            ImageView checkIcon = new ImageView(this);
+            Drawable d = ContextCompat.getDrawable(this, R.drawable.ic_check_circle);
+            if (d != null) {
+                d = d.mutate();
+                d.setColorFilter(0xFF2E7D32, PorterDuff.Mode.SRC_IN);
+                checkIcon.setImageDrawable(d);
+            }
+            int bSize = dp(16);
+            LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(bSize, bSize);
+            bLp.setMargins(0, 0, dp(6), 0);
+            badgeRow.addView(checkIcon, bLp);
+
+            TextView badge = text("Dynamic Verification Active \u2022 Original Signed Bytes 100% Intact", 12, true, 0xFF2E7D32);
+            badgeRow.addView(badge);
+
+            previewCard.addView(badgeRow);
             addSpaceIn(previewCard, 10);
         }
 
@@ -372,16 +420,34 @@ public final class MainActivity extends AppCompatActivity {
         actionsCard.addView(secTitle);
         addSpaceIn(actionsCard, 12);
 
-        if (isDocumentTampered()) {
-            TextView warn = text("⚠️ Document has been modified or tampered with after signing. Export and printing are blocked to protect document integrity.", 13, true, 0xFFC62828);
-            actionsCard.addView(warn);
+                if (isDocumentTampered()) {
+            LinearLayout warnRow = new LinearLayout(this);
+            warnRow.setOrientation(LinearLayout.HORIZONTAL);
+            warnRow.setGravity(Gravity.CENTER_VERTICAL);
+
+            ImageView warnIcon = new ImageView(this);
+            Drawable d = ContextCompat.getDrawable(this, R.drawable.ic_warning);
+            if (d != null) {
+                d = d.mutate();
+                d.setColorFilter(0xFFC62828, PorterDuff.Mode.SRC_IN);
+                warnIcon.setImageDrawable(d);
+            }
+            int wSize = dp(20);
+            LinearLayout.LayoutParams wLp = new LinearLayout.LayoutParams(wSize, wSize);
+            wLp.setMargins(0, 0, dp(8), 0);
+            warnRow.addView(warnIcon, wLp);
+
+            TextView warn = text("Document has been modified or tampered with after signing. Export and printing are blocked to protect document integrity.", 13, true, 0xFFC62828);
+            warnRow.addView(warn);
+
+            actionsCard.addView(warnRow);
             addSpaceIn(contentContainer, 12);
             contentContainer.addView(actionsCard);
             return;
         }
 
         // Option 1: Save Verified PDF (Visual Only)
-        Button saveBtn = styledButton("💾 Save PDF (Visual Only)", 0xFF2E7D32, 0xFFFFFFFF);
+        Button saveBtn = styledButton("Save PDF (Visual Only)", R.drawable.ic_save, 0xFF2E7D32, 0xFFFFFFFF);
         saveBtn.setOnClickListener(v -> exportVisualSavePdf());
         actionsCard.addView(saveBtn);
 
@@ -391,7 +457,7 @@ public final class MainActivity extends AppCompatActivity {
         addSpaceIn(actionsCard, 14);
 
         // Option 2: Print Document
-        Button printBtn = styledButton("🖨️ Print Document", 0xFF1565C0, 0xFFFFFFFF);
+        Button printBtn = styledButton("Print Document", R.drawable.ic_print, 0xFF1565C0, 0xFFFFFFFF);
         printBtn.setOnClickListener(v -> printVisualDocument());
         actionsCard.addView(printBtn);
 
@@ -409,7 +475,7 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (isDocumentTampered()) {
-            showStatusDialog("Export Blocked", "❌ This document has been modified, tampered with, or corrupted after signing. Stamping or exporting tampered documents is strictly prohibited.");
+            showStatusDialog("Export Blocked", "This document has been modified, tampered with, or corrupted after signing. Stamping or exporting tampered documents is strictly prohibited.");
             return;
         }
         if (!isDocumentCryptographicallyValid()) {
@@ -434,7 +500,7 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (isDocumentTampered()) {
-            showStatusDialog("Print Blocked", "❌ This document has been modified, tampered with, or corrupted after signing. Printing tampered documents with verified status is strictly prohibited.");
+            showStatusDialog("Print Blocked", "This document has been modified, tampered with, or corrupted after signing. Printing tampered documents with verified status is strictly prohibited.");
             return;
         }
         if (!isDocumentCryptographicallyValid()) {
@@ -531,7 +597,7 @@ public final class MainActivity extends AppCompatActivity {
             TextView dateView = text("Claimed Signing Date: " + dateStr, 12, false, 0xFF455A64);
             sigItem.addView(dateView);
 
-            String byteRangeStatus = record.byteRangePlausible ? "✓ Structurally Plausible" : "❌ Invalid / Suspicious";
+            String byteRangeStatus = record.byteRangePlausible ? "Structurally Plausible" : "Invalid / Suspicious";
             int byteRangeColor = record.byteRangePlausible ? 0xFF2E7D32 : 0xFFC62828;
             TextView byteRangeView = text("ByteRange Integrity: " + byteRangeStatus, 12, true, byteRangeColor);
             sigItem.addView(byteRangeView);
@@ -567,7 +633,7 @@ public final class MainActivity extends AppCompatActivity {
                 sigItem.addView(issuerView);
 
                 int mathColor = signer.cryptoValid ? 0xFF2E7D32 : 0xFFC62828;
-                String mathStatus = signer.cryptoValid ? "✓ Cryptographic Mathematics: VERIFIED" : "❌ Cryptographic Mathematics: INVALID";
+                String mathStatus = signer.cryptoValid ? "Cryptographic Mathematics: VERIFIED" : "Cryptographic Mathematics: INVALID";
                 TextView mathView = text(mathStatus, 12, true, mathColor);
                 sigItem.addView(mathView);
 
@@ -1144,18 +1210,34 @@ public final class MainActivity extends AppCompatActivity {
         return card;
     }
 
-    private Button styledButton(String label, int bgColor, int textColor) {
+    private Button styledButton(String label, int iconResId, int bgColor, int textColor) {
         Button b = new Button(this);
         b.setText(label);
         b.setAllCaps(false);
-        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        b.setTypeface(Typeface.DEFAULT_BOLD);
         b.setTextColor(textColor);
         b.setBackground(roundBg(bgColor, 0, dp(8)));
         b.setPadding(dp(16), dp(12), dp(16), dp(12));
+        if (iconResId != 0) {
+            Drawable icon = ContextCompat.getDrawable(this, iconResId);
+            if (icon != null) {
+                icon = icon.mutate();
+                icon.setColorFilter(textColor, PorterDuff.Mode.SRC_IN);
+                int size = dp(20);
+                icon.setBounds(0, 0, size, size);
+                b.setCompoundDrawables(icon, null, null, null);
+                b.setCompoundDrawablePadding(dp(10));
+            }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             b.setElevation(dp(1));
         }
         return b;
+    }
+
+    private Button styledButton(String label, int bgColor, int textColor) {
+        return styledButton(label, 0, bgColor, textColor);
     }
 
     private TextView text(String value, int sp, boolean bold, int color) {
