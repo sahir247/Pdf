@@ -91,6 +91,8 @@ public final class MainActivity extends AppCompatActivity {
     private Bitmap renderedPagePreview;
     private final List<SignatureRecord> records = new ArrayList<>();
     private boolean promptedForCurrentDoc = false;
+    private AlertDialog activePasswordDialog;
+    private boolean needReinspectOnResume = false;
 
     private static final class SignatureRecord {
         PDSignature signature;
@@ -133,10 +135,22 @@ public final class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (currentPdf != null) {
-            // Re-inspect to reflect any changes made in TrustManagementActivity
+        if (needReinspectOnResume && currentPdf != null && !records.isEmpty()) {
+            needReinspectOnResume = false;
+            // Re-inspect to reflect any trust changes made in TrustManagementActivity
             inspectPdf();
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (activePasswordDialog != null && activePasswordDialog.isShowing()) {
+            try {
+                activePasswordDialog.dismiss();
+            } catch (Exception ignored) {}
+            activePasswordDialog = null;
+        }
+        super.onDestroy();
     }
 
     private void handleIncomingIntent(Intent intent) {
@@ -146,14 +160,25 @@ public final class MainActivity extends AppCompatActivity {
             Uri uri = intent.getData();
             if (uri != null) {
                 String pass = intent.getStringExtra("password");
-                if (pass != null) currentPdfPassword = pass;
+                currentPdfPassword = pass != null ? pass : "";
                 promptedForCurrentDoc = false;
+                needReinspectOnResume = false;
+                if (activePasswordDialog != null && activePasswordDialog.isShowing()) {
+                    try { activePasswordDialog.dismiss(); } catch (Exception ignored) {}
+                    activePasswordDialog = null;
+                }
                 loadPdfFromUri(uri);
             }
         } else if (Intent.ACTION_SEND.equals(action)) {
             Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
             if (uri != null) {
+                currentPdfPassword = "";
                 promptedForCurrentDoc = false;
+                needReinspectOnResume = false;
+                if (activePasswordDialog != null && activePasswordDialog.isShowing()) {
+                    try { activePasswordDialog.dismiss(); } catch (Exception ignored) {}
+                    activePasswordDialog = null;
+                }
                 loadPdfFromUri(uri);
             }
         }
@@ -207,6 +232,7 @@ public final class MainActivity extends AppCompatActivity {
         certBtn.setPadding(dp(10), dp(10), dp(10), dp(10));
         certBtn.setContentDescription("Certificate & Trust Management");
         certBtn.setOnClickListener(v -> {
+            needReinspectOnResume = true;
             Intent intent = new Intent(this, TrustManagementActivity.class);
             startActivity(intent);
         });
@@ -683,6 +709,7 @@ public final class MainActivity extends AppCompatActivity {
             currentPdf = readBounded(in, MAX_PDF_BYTES);
             currentPdfName = queryDisplayName(uri);
             promptedForCurrentDoc = false;
+            needReinspectOnResume = false;
             inspectPdf();
         } catch (Exception e) {
             showStatusDialog("Open Error", "Could not read selected PDF: " + safeMessage(e));
@@ -693,7 +720,13 @@ public final class MainActivity extends AppCompatActivity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == PICK_PDF && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            currentPdfPassword = "";
             promptedForCurrentDoc = false;
+            needReinspectOnResume = false;
+            if (activePasswordDialog != null && activePasswordDialog.isShowing()) {
+                try { activePasswordDialog.dismiss(); } catch (Exception ignored) {}
+                activePasswordDialog = null;
+            }
             loadPdfFromUri(data.getData());
         }
     }
@@ -712,6 +745,11 @@ public final class MainActivity extends AppCompatActivity {
             showStatusDialog("Inspection Error", "Failed to inspect PDF: " + safeMessage(e));
             renderDocumentView();
             return;
+        }
+
+        if (activePasswordDialog != null && activePasswordDialog.isShowing()) {
+            try { activePasswordDialog.dismiss(); } catch (Exception ignored) {}
+            activePasswordDialog = null;
         }
 
         try (PDDocument document = loadedDocument) {
@@ -1108,6 +1146,17 @@ public final class MainActivity extends AppCompatActivity {
     private void showPasswordDialog(boolean previousAttemptFailed) {
         if (currentPdf == null) return;
 
+        if (activePasswordDialog != null && activePasswordDialog.isShowing()) {
+            if (!previousAttemptFailed) {
+                // Password prompt is already actively showing to the user; do not create duplicate
+                return;
+            }
+            try {
+                activePasswordDialog.dismiss();
+            } catch (Exception ignored) {}
+            activePasswordDialog = null;
+        }
+
         EditText passwordInput = new EditText(this);
         passwordInput.setSingleLine(true);
         passwordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -1130,14 +1179,22 @@ public final class MainActivity extends AppCompatActivity {
                 .setView(panel)
                 .setCancelable(false)
                 .setNegativeButton("Cancel", (d, which) -> {
-                    currentPdfPassword = null;
+                    currentPdfPassword = "";
                     currentPdf = null;
                     records.clear();
                     renderedPagePreview = null;
+                    activePasswordDialog = null;
                     renderDocumentView();
                 })
                 .setPositiveButton("Unlock", null)
                 .create();
+
+        activePasswordDialog = dialog;
+        dialog.setOnDismissListener(d -> {
+            if (activePasswordDialog == d) {
+                activePasswordDialog = null;
+            }
+        });
 
         passwordInput.setOnEditorActionListener((v, actionId, event) -> {
             String input = passwordInput.getText().toString();
@@ -1146,6 +1203,7 @@ public final class MainActivity extends AppCompatActivity {
                 return true;
             }
             currentPdfPassword = input;
+            activePasswordDialog = null;
             dialog.dismiss();
             inspectPdf();
             return true;
@@ -1160,6 +1218,7 @@ public final class MainActivity extends AppCompatActivity {
                     return;
                 }
                 currentPdfPassword = input;
+                activePasswordDialog = null;
                 dialog.dismiss();
                 inspectPdf();
             });
