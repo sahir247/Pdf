@@ -291,11 +291,16 @@ public final class PdfStamperEngine {
         float h = height > 0 ? height : 100f;
         form.setBBox(new PDRectangle(0, 0, w, h));
 
-        float scale = 0.851f;
-        float sx = (w / 1000.0f) * scale;
-        float sy = (h / 1000.0f) * scale;
-        float tx = (w * (1.0f - scale)) * 0.5f;
-        float ty = (h * (1.0f - scale)) * 0.5f;
+        // Authentic Adobe Acrobat DC DigSig appearance layout (REA Function 0x180024FE0):
+        // Isotropic uniform scaling and slot-centering of canonical DigSig icon [0, 0, 963.579, 1000.0]
+        float iconW = 963.579f;
+        float iconH = 1000.0f;
+        float iconScale = 0.851f; // Authentic Adobe DigSig canonical 85.1% slot occupancy
+        float scale = Math.min(w / iconW, h / iconH) * iconScale;
+        float sx = scale;
+        float sy = scale;
+        float tx = (w - scale * iconW) * 0.5f;
+        float ty = (h - scale * iconH) * 0.5f;
 
         StringBuilder sb = new StringBuilder();
         sb.append("q\n");

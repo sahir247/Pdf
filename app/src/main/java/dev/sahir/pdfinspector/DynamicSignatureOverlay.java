@@ -243,42 +243,12 @@ public final class DynamicSignatureOverlay {
         float titleY = bounds.bottom - (layout.titleY >= 0 ? layout.titleY : widgetH * 0.77f) * scaleY;
         String titleText = "Signature valid";
 
-        // 3. Dynamic typography-driven checkmark placement (AGENTS.md Rules 1-4)
-        float titleWidth = AdobeCoolTypeEngine.measureExactWidth(titleText, titleFontSize, true);
-        boolean isCompact = widgetW < (layout.titleX >= 0 ? layout.titleX : 2.0f) + titleWidth * 1.05f || (widgetW <= 70f);
-
-        float tipXPdf;
-        if (isCompact) {
-            tipXPdf = AdobeCoolTypeEngine.calculateAnchorInsideSignatureBetweenUAndR(titleText, layout.titleX >= 0 ? layout.titleX : 2.0f, titleFontSize);
-        } else {
-            tipXPdf = AdobeCoolTypeEngine.calculateAnchorInsideAOfValid(titleText, layout.titleX >= 0 ? layout.titleX : 2.0f, titleFontSize);
-        }
-
-        float titleYPdf = layout.titleY >= 0 ? layout.titleY : widgetH * 0.77f;
-        float tipYPdf = titleYPdf + 0.48f * titleFontSize;
-
-        float apexYPdf;
-        if (isCompact) {
-            // Aadhaar / compact stamp: apex rests delicately on top of '2' in date line
-            float dateLineY = !layout.lines.isEmpty() ? layout.lines.get(layout.lines.size() - 1).y : (titleYPdf - 2.5f * titleFontSize);
-            float dateFontSize = !layout.lines.isEmpty() ? layout.lines.get(layout.lines.size() - 1).fontSize : 3.4f;
-            apexYPdf = dateLineY + 0.72f * dateFontSize;
-        } else {
-            // Standard banner (Income): apex rests on line N-2, hovering cleanly above bottom line (Dist / Location)
-            if (layout.lines.size() >= 2) {
-                AppearanceLayout.Line secondBottomLine = layout.lines.get(layout.lines.size() - 2);
-                apexYPdf = secondBottomLine.y + 0.15f * secondBottomLine.fontSize;
-            } else if (!layout.lines.isEmpty()) {
-                apexYPdf = layout.lines.get(0).y + 0.20f * layout.lines.get(0).fontSize;
-            } else {
-                apexYPdf = titleYPdf - 2.42f * titleFontSize;
-            }
-        }
-
-        float checkHeightPdf = Math.max(8.0f, tipYPdf - apexYPdf);
-        float checkSizePdf = checkHeightPdf;
-        float checkCxPdf = tipXPdf - (0.8673f - 0.5f) * checkSizePdf;
-        float checkCyPdf = tipYPdf - (1.0000f - 0.5f) * checkSizePdf;
+        // 3. Authentic Adobe Acrobat DC DigSig appearance layout (REA Function 0x180024FE0):
+        // Derives checkmark coordinates directly from the /FRM -> /n1 subform matrix in the PDF appearance stream.
+        // Canonical DigSig center in unit [0 .. 100] is at (51.55, 50.00) with size = 85.1 pt per 100 pt slot.
+        float checkCxPdf = layout.n1Tx + layout.n1Scale * 51.55f;
+        float checkCyPdf = layout.n1Ty + layout.n1Scale * 50.00f;
+        float checkSizePdf = layout.n1Scale * 85.10f;
 
         float checkCx = bounds.left + checkCxPdf * scaleX;
         float checkCy = bounds.bottom - checkCyPdf * scaleY;
@@ -365,7 +335,7 @@ public final class DynamicSignatureOverlay {
 
         float tipX = AdobeCoolTypeEngine.calculateAnchorInsideAOfValid(titleText, titleX, titleSize);
         float checkSize = Math.min(height * 0.72f, titleSize * 2.90f);
-        float checkCx = tipX - (0.8673f - 0.5f) * checkSize;
+        float checkCx = tipX - (0.9340f - 0.5f) * checkSize;
         float checkCy = titleBaselineY - 0.48f * titleSize - (1.0000f - 0.5f) * checkSize;
 
         drawAdobeCheckmark(canvas, checkCx, checkCy, checkSize);
