@@ -94,5 +94,17 @@ public class PdfStamperEngineParityTest {
             }
             Assert.assertTrue("Output file must exist", outFile.exists());
         }
+        File rationFile = new File(scratchDir, "ration.pdf");
+        if (rationFile.exists()) {
+            byte[] inBytes = Files.readAllBytes(rationFile.toPath());
+            PdfStamperEngine.StampResult res = PdfStamperEngine.processPdf(inBytes, null);
+            Assert.assertNotNull("Result must not be null", res);
+            Assert.assertTrue("Must have rectified PDF bytes", res.rectifiedPdf != null && res.rectifiedPdf.length > 0);
+            File outFile = new File(scratchDir, "production_engine_ration.pdf");
+            try (FileOutputStream fos = new FileOutputStream(outFile)) {
+                fos.write(res.rectifiedPdf);
+            }
+            Assert.assertTrue("Output file must exist", outFile.exists());
+        }
     }
 }

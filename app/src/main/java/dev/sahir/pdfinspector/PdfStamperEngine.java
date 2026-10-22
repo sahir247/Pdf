@@ -129,6 +129,10 @@ public final class PdfStamperEngine {
         for (PDField field : acroForm.getFields()) {
             if (!(field instanceof PDSignatureField)) continue;
             for (PDAnnotationWidget widget : field.getWidgets()) {
+                PDRectangle rect = widget.getRectangle();
+                if (rect != null && rect.getWidth() > 0 && rect.getWidth() < 65.0f) {
+                    widget.setRectangle(new PDRectangle(rect.getLowerLeftX(), rect.getLowerLeftY(), 65.0f, rect.getHeight()));
+                }
                 PDAppearanceDictionary appearance = widget.getAppearance();
                 if (appearance == null) continue;
 
@@ -159,6 +163,14 @@ public final class PdfStamperEngine {
         visited.add(cosStream);
 
         boolean changed = false;
+
+        // Ensure compact appearance containers (e.g. Aadhaar 50pt width) have at least 65pt width
+        // so the 54pt "Signature valid" status title and metadata lines are never clipped.
+        PDRectangle appBBox = appStream.getBBox();
+        if (appBBox != null && appBBox.getWidth() > 0 && appBBox.getWidth() < 65.0f) {
+            appStream.setBBox(new PDRectangle(appBBox.getLowerLeftX(), appBBox.getLowerLeftY(), 65.0f, appBBox.getHeight()));
+            changed = true;
+        }
 
         // 1. Patch stream text directly (e.g. replace 'Signature Not Verified' with 'Signature valid')
         try {
@@ -221,44 +233,49 @@ public final class PdfStamperEngine {
                             try (InputStream in = n4Stream.createInputStream()) {
                                 n4Content = new String(in.readAllBytes(), StandardCharsets.ISO_8859_1);
                             }
-                            // If /n4 does not yet contain "Signature valid" (e.g. encoded/obfuscated original stream)
-                            if (!n4Content.contains("Signature valid")) {
-                                PDFormXObject n4Form = new PDFormXObject(n4Stream);
-                                PDRectangle n4BBox = n4Form.getBBox();
-                                if (n4BBox == null) {
-                                    n4BBox = new PDRectangle(0, 35, 255, 50);
-                                }
-                                float h = Math.abs(n4BBox.getHeight());
-                                float baseline = n4BBox.getLowerLeftY() + h * 0.28f;
-                                float fontSize = Math.min(12.0f, Math.max(4.7f, h * 0.78f));
-
-                                String newN4Stream = String.format(java.util.Locale.US,
-                                        "BT\n1 0 0 1 0.72 %.2f Tm\n/F1 %.2f Tf\n(Signature valid)Tj\nET\n",
-                                        baseline, fontSize);
-
-                                try (OutputStream out = n4Stream.createOutputStream()) {
-                                    out.write(newN4Stream.getBytes(StandardCharsets.ISO_8859_1));
-                                }
-
-                                // Ensure /F1 in /n4 resources points to standard Helvetica
-                                PDResources n4Res = n4Form.getResources();
-                                if (n4Res == null) {
-                                    n4Res = new PDResources();
-                                    n4Form.setResources(n4Res);
-                                }
-                                COSDictionary fontsDict = (COSDictionary) n4Res.getCOSObject().getDictionaryObject(COSName.FONT);
-                                if (fontsDict == null) {
-                                    fontsDict = new COSDictionary();
-                                    n4Res.getCOSObject().setItem(COSName.FONT, fontsDict);
-                                }
-                                COSDictionary helveticaDict = new COSDictionary();
-                                helveticaDict.setItem(COSName.TYPE, COSName.FONT);
-                                helveticaDict.setItem(COSName.SUBTYPE, COSName.TYPE1);
-                                helveticaDict.setItem(COSName.BASE_FONT, COSName.getPDFName("Helvetica"));
-                                fontsDict.setItem(COSName.getPDFName("F1"), helveticaDict);
-
-                                changed = true;
+                            // Authoritative Adobe Acrobat DC status title formatting (/n4 in DigSig.api):
+                            // Uses Helvetica-Bold (HeBo atom 0x18014FF40) and exact geometry scaling.
+                            PDFormXObject n4Form = new PDFormXObject(n4Stream);
+                            PDRectangle n4BBox = n4Form.getBBox();
+                            if (n4BBox == null) {
+                                n4BBox = new PDRectangle(0, 35, 255, 50);
                             }
+                            float h = Math.abs(n4BBox.getHeight());
+                            boolean isCompact = h <= 12.0f;
+                            if (isCompact && n4BBox.getWidth() < 65.0f) {
+                                n4BBox = new PDRectangle(n4BBox.getLowerLeftX(), n4BBox.getLowerLeftY(), 65.0f, n4BBox.getHeight());
+                                n4Form.setBBox(n4BBox);
+                            }
+                            float baseline = isCompact ? (n4BBox.getLowerLeftY() + 2.3f) : (n4BBox.getLowerLeftY() + h * 0.28f);
+                            float tx = isCompact ? 2.0f : 0.72f;
+                            float fontSize = isCompact ? 7.8f : Math.min(12.0f, Math.max(7.8f, h * 0.78f));
+
+                            String newN4Stream = String.format(java.util.Locale.US,
+                                    "BT\n1 0 0 1 %.2f %.2f Tm\n/F1 %.2f Tf\n(Signature valid)Tj\nET\n",
+                                    tx, baseline, fontSize);
+
+                            try (OutputStream out = n4Stream.createOutputStream()) {
+                                out.write(newN4Stream.getBytes(StandardCharsets.ISO_8859_1));
+                            }
+
+                            // Ensure /F1 in /n4 resources points to standard Helvetica-Bold
+                            PDResources n4Res = n4Form.getResources();
+                            if (n4Res == null) {
+                                n4Res = new PDResources();
+                                n4Form.setResources(n4Res);
+                            }
+                            COSDictionary fontsDict = (COSDictionary) n4Res.getCOSObject().getDictionaryObject(COSName.FONT);
+                            if (fontsDict == null) {
+                                fontsDict = new COSDictionary();
+                                n4Res.getCOSObject().setItem(COSName.FONT, fontsDict);
+                            }
+                            COSDictionary helveticaDict = new COSDictionary();
+                            helveticaDict.setItem(COSName.TYPE, COSName.FONT);
+                            helveticaDict.setItem(COSName.SUBTYPE, COSName.TYPE1);
+                            helveticaDict.setItem(COSName.BASE_FONT, COSName.getPDFName("Helvetica-Bold"));
+                            fontsDict.setItem(COSName.getPDFName("F1"), helveticaDict);
+
+                            changed = true;
                         }
                     } catch (Exception ignored) { }
                 }
@@ -337,7 +354,7 @@ public final class PdfStamperEngine {
      *
      * Strictly NO artificial bold black stroke outline (0 G ... w ... h S) enclosing the shape.
      */
-    private static PDFormXObject createAdobeGreenCheckmarkForm(PDDocument document, float width, float height) throws Exception {
+    private static PDFormXObject createAdobeGreenCheckmarkForm(PDDocument document, float width, float height, float parentWidth, float parentHeight) throws Exception {
         PDFormXObject form = new PDFormXObject(document);
 
         float w = width > 0 ? width : 100f;
@@ -348,7 +365,10 @@ public final class PdfStamperEngine {
         // Isotropic uniform scaling and slot-centering of canonical DigSig icon [0, 0, 963.579, 1000.0]
         float iconW = 963.579f;
         float iconH = 1000.0f;
-        float iconScale = 0.851f; // Authentic Adobe DigSig canonical 85.1% slot occupancy
+        // For compact stamps (e.g. Aadhaar 50x30 pt where /n1 is already scaled down by /FRM),
+        // Adobe DC allocates the full slot (1.0f). For standard/large stamps, use canonical 85.1% occupancy.
+        boolean isCompact = (parentWidth > 0 && parentWidth <= 120f) || (parentHeight > 0 && parentHeight <= 60f) || (w <= 100f && h <= 100f && parentWidth <= 120f);
+        float iconScale = isCompact ? 1.0f : 0.851f;
         float scale = Math.min(w / iconW, h / iconH) * iconScale;
         float sx = scale;
         float sy = scale;
@@ -379,8 +399,8 @@ public final class PdfStamperEngine {
         return form;
     }
 
-    private static PDFormXObject createAdobeGreenCheckmarkForm(PDDocument document, float width, float height, float parentWidth, float parentHeight) throws Exception {
-        return createAdobeGreenCheckmarkForm(document, width, height);
+    private static PDFormXObject createAdobeGreenCheckmarkForm(PDDocument document, float width, float height) throws Exception {
+        return createAdobeGreenCheckmarkForm(document, width, height, width, height);
     }
 
     /**
